@@ -1,0 +1,38 @@
+import db
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    var database = try db.Database(arguments[1])
+    defer database.close()
+    let before = try database.snapshot()
+    defer before.release()
+    assert(try before.value().count() == 0)
+    let tx = try database.begin()
+    defer tx.release()
+    try tx.value().put_text("user/alice", "Alice")
+    try tx.value().put_text("package/test", "v1")
+    let read = (try tx.value().get("user/alice")) else trap("read your writes")
+    defer read.release()
+    assert(try read.value().text() == "Alice")
+    assert(try tx.value().commit() == 1)
+    assert(try before.value().count() == 0)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    assert(try snapshot.value().count() == 2)
+    assert(try snapshot.value().key_at(0) == "package/test")
+    let stale = try database.begin()
+    defer stale.release()
+    let winner = try database.begin()
+    defer winner.release()
+    try winner.value().remove("package/test")
+    assert(try winner.value().commit() == 2)
+    try stale.value().put_text("orphan", "must not commit")
+    var rejected = false
+    discard(stale.value().commit() catch failure:
+        assert(failure.code == db.conflict)
+        rejected = true
+        recover -1)
+    assert(rejected)
+    assert(try snapshot.value().count() == 2)
+    print("PASS transactions, snapshots, ordering, read-your-writes, conflicts")
+    return 0

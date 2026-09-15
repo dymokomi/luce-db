@@ -1,0 +1,72 @@
+import db
+import thread
+import interop
+
+var errors: @u64
+var retries: @u64
+var ready: @u64
+var go: @u64
+
+func work(raw: void*?):
+    let database = (db.Database*)(raw else trap("worker context"))
+    discard(ready.add(1, .release))
+    while go.load(.acquire) == 0: thread.sleep(1)
+    for index in 0..<40:
+        var finished = false
+        for attempt in 0..<10000:
+            let tx = database.begin() catch failure: trap(failure.message)
+            defer tx.release()
+            let previous = tx.value().get("counter") catch failure: trap(failure.message)
+            var number: u64
+            if let item = previous:
+                defer item.release()
+                let encoded = item.value().bytes() catch failure: trap(failure.message)
+                for i in 0..<8: number |= (u64)encoded[i] << (8 * i)
+            number += 1
+            var encoded: u8[8]
+            for i in 0..<8: encoded[i] = (u8)(number >> (8 * i))
+            tx.value().put("counter", encoded) catch failure: trap(failure.message)
+            tx.value().put("mirror", encoded) catch failure: trap(failure.message)
+            let committed = tx.value().commit() catch failure:
+                if failure.code != db.conflict and failure.code != db.busy: trap(failure.message)
+                discard(retries.add(1, .relaxed))
+                thread.sleep(1)
+                recover -1
+            if committed > 0:
+                finished = true
+                break
+        if not finished: discard(errors.add(1, .relaxed))
+        let snapshot = database.snapshot() catch failure: trap(failure.message)
+        defer snapshot.release()
+        let a = (snapshot.value().get("counter") catch failure: trap(failure.message)) else trap("counter missing")
+        defer a.release()
+        let b = (snapshot.value().get("mirror") catch failure: trap(failure.message)) else trap("mirror missing")
+        defer b.release()
+        let aa = a.value().bytes() catch failure: trap(failure.message)
+        let bb = b.value().bytes() catch failure: trap(failure.message)
+        for i in 0..<8: assert(aa[i] == bb[i])
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    var database = try db.Database(arguments[1])
+    defer database.close()
+    let empty = try database.snapshot()
+    defer empty.release()
+    var workers: thread.Handle[8]
+    for index in 0..<8: workers[index] = try thread.spawn(work, &database, name = "db-test")
+    while ready.load(.acquire) != 8: thread.sleep(1)
+    go.store(1, .release)
+    for worker in workers: try worker.join()
+    assert(errors.load(.acquire) == 0)
+    assert(try empty.value().count() == 0)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    assert(try snapshot.value().generation() == 320)
+    let item = (try snapshot.value().get("counter")) else trap("counter missing")
+    defer item.release()
+    let encoded = try item.value().bytes()
+    var number: u64
+    for i in 0..<8: number |= (u64)encoded[i] << (8 * i)
+    assert(number == 320)
+    print(f"PASS 8 threads, 320 atomic commits, consistent snapshots; retries={retries.load(.acquire)}")
+    return 0

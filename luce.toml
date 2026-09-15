@@ -1,0 +1,6 @@
+[package]
+name = "luce_db"
+source = "src"
+
+[exports]
+db = "luce_db.db"

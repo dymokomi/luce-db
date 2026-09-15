@@ -1,0 +1,61 @@
+name: Native database correctness
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  correctness:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: luce-db
+      - name: Read source pins
+        id: pins
+        shell: bash
+        run: |
+          echo "base=$(tr -d '\n' < luce-db/bootstrap/BASE)" >> "$GITHUB_OUTPUT"
+          echo "luce=$(tr -d '\n' < luce-db/bootstrap/LUCE)" >> "$GITHUB_OUTPUT"
+          echo "server=$(tr -d '\n' < luce-db/bootstrap/SERVER)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-base
+          ref: ${{ steps.pins.outputs.base }}
+          path: luce-base
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce
+          ref: ${{ steps.pins.outputs.luce }}
+          path: luce
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-server
+          ref: ${{ steps.pins.outputs.server }}
+          path: luce-server
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Bootstrap into package build directory
+        working-directory: luce-db
+        run: python3 tools/bootstrap.py
+      - name: Test all six compiler modes
+        working-directory: luce-db
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/run.py 2>&1 | tee build/correctness.log
+      - name: Memory safety instrumentation
+        working-directory: luce-db
+        run: python3 tests/sanitize.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: database-tests-${{ matrix.os }}
+          path: luce-db/build/correctness.log

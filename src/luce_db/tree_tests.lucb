@@ -1,0 +1,60 @@
+import luce_db.tree as tree
+import luce_db.bytes as bytes
+
+pub func main(arguments: str[]) -> i32!:
+    discard(arguments)
+    assert(bytes.checksum(b"123456789") == 3421780262)
+    var root: tree.Node*?
+    defer tree.drop(root)
+    for i in 0..<1000:
+        var buffer: u8[32]
+        let key = try format(buffer, f"key-{i}")
+        let item = try tree.entry(key.bytes, key.bytes)
+        defer tree.drop_entry(item)
+        let next = try tree.put(root, item)
+        tree.drop(root)
+        root = next
+        assert(tree.validate(root))
+    assert(tree.count(root) == 1000)
+    let old = tree.hold(root)
+    defer tree.drop(old)
+    for i in 0..<1000:
+        var buffer: u8[32]
+        let key = try format(buffer, f"key-{i}")
+        assert(tree.find(root, key.bytes) != none)
+        let next = try tree.remove(root, key.bytes)
+        tree.drop(root)
+        root = next
+        assert(tree.validate(root))
+    assert(tree.count(root) == 0)
+    assert(tree.count(old) == 1000)
+    var present: bool[257]
+    var expected: usize
+    var seed: u64 = 971
+    for step in 0..<4000:
+        seed = (seed * 48271) % 2147483647
+        let index = (usize)(seed % 257)
+        var buffer: u8[32]
+        let key = try format(buffer, f"random-{index}")
+        if step % 3 == 0:
+            let next = try tree.remove(root, key.bytes)
+            tree.drop(root)
+            root = next
+            if present[index]: expected -= 1
+            present[index] = false
+        else:
+            let item = try tree.entry(key.bytes, key.bytes)
+            defer tree.drop_entry(item)
+            let next = try tree.put(root, item)
+            tree.drop(root)
+            root = next
+            if not present[index]: expected += 1
+            present[index] = true
+        assert(tree.count(root) == expected and tree.validate(root))
+        assert((tree.find(root, key.bytes) != none) == present[index])
+        for rank in 1..<expected:
+            let left = tree.at(root, rank - 1) else trap("rank missing")
+            let right = tree.at(root, rank) else trap("rank missing")
+            assert(bytes.compare(left.key.span(), right.key.span()) < 0)
+    print("PASS immutable AVL, 4000 model-based operations, ordering, snapshots, checksum")
+    return 0

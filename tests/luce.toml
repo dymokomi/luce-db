@@ -1,0 +1,6 @@
+[package]
+name = "luce_db_tests"
+
+[dependencies]
+luce_db = ".."
+luce_server = "../../luce-server"

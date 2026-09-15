@@ -1,0 +1,73 @@
+## Subprocess fixture for an independent Python journal/corruption oracle.
+import db
+import thread
+import interop
+import io
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    var database = try db.Database(arguments[2])
+    defer database.close()
+    if arguments[1] == "write":
+        let tx = try database.begin()
+        defer tx.release()
+        try tx.value().put_text("user/alice", "Alice")
+        try tx.value().put("binary", b"\0\xff\x7f")
+        assert(try tx.value().commit() == 1)
+        let next = try database.begin()
+        defer next.release()
+        try next.value().remove("user/alice")
+        try next.value().put_text("user/bob", "Bob")
+        assert(try next.value().commit() == 2)
+    elif arguments[1] == "append":
+        let tx = try database.begin()
+        defer tx.release()
+        try tx.value().put_text("after", "recovery")
+        discard(try tx.value().commit())
+    elif arguments[1] == "uncertain":
+        let tx = try database.begin()
+        defer tx.release()
+        var data: u8[256]
+        for index in 0..<256: data[index] = 'a'
+        try tx.value().put("partial", data)
+        var refused = false
+        discard(tx.value().commit() catch failure:
+            assert(failure.code == db.uncertain)
+            refused = true
+            recover -1)
+        assert(refused)
+        refused = false
+        let unavailable: interop.Reference[db.Snapshot]? = database.snapshot() catch failure:
+            assert(failure.code == db.uncertain)
+            refused = true
+            recover none
+        assert(refused and unavailable == none)
+        refused = false
+        discard(tx.value().commit() catch failure:
+            assert(failure.code == db.uncertain)
+            refused = true
+            recover -1)
+        assert(refused)
+        print("PASS uncertain I/O poisons new reads and commits")
+    elif arguments[1] == "hold":
+        print("READY")
+        try io.flush_stdout()
+        thread.sleep(30000)
+    elif arguments[1] == "crash":
+        for index in 0..<10000:
+            let tx = try database.begin()
+            defer tx.release()
+            var scratch: u8[32]
+            let key = try format(scratch, f"commit/{index}")
+            try tx.value().put_text(key, "durable")
+            try tx.value().put_text("last", key)
+            let generation = try tx.value().commit()
+            print(f"ACK {generation}")
+            try io.flush_stdout()
+    else:
+        let snapshot = try database.snapshot()
+        defer snapshot.release()
+        print(f"STATE {try snapshot.value().generation()} {try snapshot.value().count()}")
+        for index in 0..<try snapshot.value().count():
+            print(try snapshot.value().key_at(index) else "missing")
+    return 0

@@ -1,0 +1,22 @@
+from db import Database
+
+pub func main(arguments: list[str]) -> int!:
+    let database = Database(arguments[0])
+    let transaction = database.begin()
+    transaction.insert_text("user/alice", "Alice")
+    transaction.put_text("package/demo", "1.0")
+    assert(transaction.commit() == 1)
+    let snapshot = database.snapshot()
+    assert(snapshot.count() == 2)
+    let value = snapshot.get("user/alice") else return 1
+    assert(value.text() == "Alice")
+    database.close()
+    assert(snapshot.contains("user/alice"))
+    snapshot.close()
+    assert(value.text() == "Alice")
+    value.close()
+    let reopened = Database(arguments[0])
+    assert(reopened.snapshot().generation() == 1)
+    reopened.close()
+    print("PASS Luce facade, ownership, reopen")
+    return 0

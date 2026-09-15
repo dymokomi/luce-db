@@ -1,0 +1,168 @@
+## Append-only v1 journal. Exactly one process owns the persistent sidecar lock.
+## Partial final frames are discarded on reopen; complete corrupt frames fail.
+import c
+import files
+import io
+import memory
+import paths
+import platform
+import strings
+import luce_db.tree as tree
+from luce_db.bytes import Buffer, Reader, checksum, compare, valid_key, max_key, max_value, max_frame, corrupt, invalid, busy, limit
+
+extern func flock(descriptor: i32, flags: i32) -> i32
+extern func fsync(descriptor: i32) -> i32
+
+pub let header: str = "LUCE-DB-WAL-001\n"
+pub let max_journal: i64 = 268435456
+
+pub struct Journal:
+    pub var file: files.File
+    var lock_file: files.File
+    pub var position: i64
+    pub var recovered_tail: i64
+
+    pub mutating func close():
+        self.file.destroy()
+        self.lock_file.destroy()
+
+    pub mutating func append(frame: const u8[]) -> !:
+        if (i64)frame.length > max_journal - self.position:
+            error(limit, "journal reached 256 MiB; export to a fresh database")
+        try io.write_all(&self.file, frame)
+        try self.file.sync()
+        self.position += (i64)frame.length
+
+pub func open(path: str) -> Journal!:
+    if platform.windows:
+        error(invalid, "database file locking is currently supported on POSIX only")
+    if path.length == 0 or strings.contains(path, "\0"):
+        error(invalid, "invalid database path")
+    let directory_name = try strings.copy(paths.directory(path))
+    defer strings.release(directory_name)
+    let file_name = try strings.copy(paths.base(path))
+    defer strings.release(file_name)
+    if file_name == "" or file_name == "." or file_name == "..":
+        error(invalid, "database path needs a filename")
+    var scratch: u8[4096]
+    let lock_name = try format(scratch, f"{file_name}.lock")
+    var directory = try files.Directory.open((c.str)directory_name, follow_symlinks = false)
+    defer directory.destroy()
+    var lock_file = try directory.open_file((c.str)lock_name, files.OpenMode.append, 384, follow_symlinks = false, nonblocking = true)
+    errdefer lock_file.destroy()
+    if (try lock_file.metadata()).kind != files.FileKind.regular:
+        error(invalid, "database lock is not a regular file")
+    let lock_fd = lock_file.descriptor() else error(invalid, "database lock is closed")
+    if flock(lock_fd, 6) != 0:
+        error(busy, "database already has an owner or locking failed")
+    var created = false
+    var file = directory.open_file((c.str)file_name, files.OpenMode.read_write, follow_symlinks = false, nonblocking = true) catch failure:
+        if failure.code != files.missing: error(failure.code, failure.message)
+        created = true
+        recover try directory.open_file((c.str)file_name, files.OpenMode.create_new_read_write, 384, follow_symlinks = false, nonblocking = true)
+    errdefer file.destroy()
+    let metadata = try file.metadata()
+    if metadata.kind != files.FileKind.regular or metadata.links != 1:
+        error(invalid, "database must be a regular file with one link")
+    if created:
+        try io.write_all(&file, header.bytes)
+        try file.sync()
+        let directory_fd = try directory.descriptor()
+        var result = fsync(directory_fd)
+        while result != 0 and c.errno() == c.interrupted: result = fsync(directory_fd)
+        if result != 0: error(invalid, "database directory sync failed")
+    discard(try file.seek(0))
+    return Journal(file = file, lock_file = lock_file)
+
+pub func encode_frame(payload: const u8[], generation: u64, operations: usize) -> Buffer!:
+    var out: Buffer
+    errdefer out.close()
+    try out.put(b"TXN1")
+    try out.uint((u64)payload.length, 4)
+    try out.uint(generation, 8)
+    try out.uint((u64)operations, 4)
+    try out.uint((u64)checksum(out.span()), 4)
+    try out.put(payload)
+    let crc = checksum(out.span())
+    try out.uint((u64)crc, 4)
+    try out.put(b"END1")
+    return out
+
+pub func operation(out: Buffer*, key: str, value: const u8[], deleted: bool) -> !:
+    try out.reserve(out.count + 9 + key.length + value.length)
+    try out.uint(2 if deleted else 1, 1)
+    try out.uint((u64)key.length, 4)
+    try out.uint((u64)value.length, 4)
+    try out.put(key.bytes)
+    try out.put(value)
+
+func apply(payload: const u8[], operations: usize, root: tree.Node*?) -> tree.Node*?!:
+    var next = tree.hold(root)
+    errdefer tree.drop(next)
+    var reader = Reader(bytes = payload)
+    if operations == 0 or operations > 65536:
+        error(corrupt, "invalid database operation count")
+    for index in 0..<operations:
+        let kind = try reader.uint(1)
+        let key_length = (usize)try reader.uint(4)
+        let value_length = (usize)try reader.uint(4)
+        if key_length == 0 or key_length > max_key or value_length > max_value or (kind != 1 and kind != 2) or (kind == 2 and value_length != 0):
+            error(corrupt, "invalid database operation")
+        let key = try reader.take(key_length)
+        valid_key((str)key) catch failure: error(corrupt, "invalid persisted key")
+        let value = try reader.take(value_length)
+        var replacement: tree.Node*?
+        if kind == 1:
+            let item = try tree.entry(key, value)
+            defer tree.drop_entry(item)
+            replacement = try tree.put(next, item)
+        else:
+            replacement = try tree.remove(next, key)
+        tree.drop(next)
+        next = replacement
+    if reader.offset != payload.length:
+        error(corrupt, "extra bytes in database transaction")
+    return next
+
+pub func replay(log: Journal*, root: tree.Node*?*, generation: u64*) -> !:
+    let size = (try log.file.metadata()).size
+    if size < (i64)header.length or size > max_journal:
+        error(corrupt, "invalid database journal size")
+    var magic: u8[16]
+    try io.read_exact(&log.file, magic)
+    if compare(magic, header.bytes) != 0: error(corrupt, "unknown database format")
+    log.position = 16
+    while log.position < size:
+        let remaining = size - log.position
+        if remaining < 24: break
+        var prefix: u8[24]
+        try io.read_exact(&log.file, prefix)
+        var reader = Reader(bytes = prefix)
+        if compare(try reader.take(4), b"TXN1") != 0: error(corrupt, "invalid transaction header")
+        let length = (usize)try reader.uint(4)
+        let sequence = try reader.uint(8)
+        let operations = (usize)try reader.uint(4)
+        let prefix_crc = try reader.uint(4)
+        if prefix_crc != (u64)checksum(prefix[..<20]) or sequence != *generation + 1 or sequence > 9223372036854775807:
+            error(corrupt, "invalid transaction sequence/checksum")
+        if length > max_frame - 32: error(corrupt, "invalid transaction size")
+        if (i64)length + 32 > remaining: break
+        var bytes: Buffer
+        defer bytes.close()
+        try bytes.reserve(length + 32)
+        try bytes.put(prefix)
+        try io.read_exact(&log.file, bytes.data[24..<length + 32])
+        bytes.count = length + 32
+        var trailer = Reader(bytes = bytes.span()[24 + length..])
+        if try trailer.uint(4) != (u64)checksum(bytes.span()[..<24 + length]) or compare(try trailer.take(4), b"END1") != 0:
+            error(corrupt, "invalid transaction trailer/checksum")
+        let next = try apply(bytes.span()[24..<24 + length], operations, *root)
+        tree.drop(*root)
+        *root = next
+        *generation = sequence
+        log.position += (i64)length + 32
+    if log.position < size:
+        log.recovered_tail = size - log.position
+        try log.file.truncate(log.position)
+        try log.file.sync()
+    discard(try log.file.seek(log.position))

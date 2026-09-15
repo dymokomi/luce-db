@@ -1,0 +1,8 @@
+## Compiler-audit reproducer, intentionally excluded from the passing package gate.
+## An empty span's valid empty slice emits null-pointer arithmetic in C.
+pub func main(arguments: str[]) -> i32:
+    discard(arguments)
+    var empty: u8[]
+    let sliced = empty[0..<0]
+    assert(sliced.length == 0)
+    return 0
