@@ -5,6 +5,7 @@ import luce_db.tree as tree
 import luce_db.journal as journal
 import luce_db.writers as writers
 import luce_db.storage_io as storage_io
+import luce_db.backup as backup
 from luce_db.bytes import Buffer, valid_key, max_value, max_frame, invalid, limit, closed, conflict, uncertain
 
 pub struct Store:
@@ -176,6 +177,11 @@ pub struct Transaction:
 
 pub func transaction(store: Store*) -> Transaction!:
     return Transaction(view = try snapshot(store))
+
+pub func backup_to(store: Store*, path: str, controls: storage_io.Controls = storage_io.Controls()) -> backup.Info!:
+    var view = try snapshot(store)
+    defer view.close()
+    return try backup.export_root(view.root, view.generation, path, controls)
 
 pub func checkpoint(store: Store*, wait_ms: i64 = 0) -> u64!:
     hold(store)

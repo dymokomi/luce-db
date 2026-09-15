@@ -57,6 +57,9 @@ jobs:
       - name: Checkpoint larger than one transaction frame
         working-directory: luce-db
         run: python3 tests/check_checkpoint.py build/native3/checkpoint_driver --full
+      - name: Backup and restore larger than one transaction frame
+        working-directory: luce-db
+        run: python3 tests/check_backup.py build/native3/backup_driver build/native3/checkpoint_driver --full
       - name: Package Linux test binaries
         if: runner.os == 'Linux'
         working-directory: luce-db

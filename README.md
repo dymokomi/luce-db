@@ -59,6 +59,11 @@ name, not hyphenated import syntax. See [tests/facade.luc](tests/facade.luc).
 - `Database.checkpoint(wait_ms=0)`: explicitly rewrite current records into a
   bounded-memory base snapshot, preserving generation and existing readers. This
   upgrades format 001 to 002; see [checkpoint semantics and failure recovery](docs/CHECKPOINTS.md).
+- `Database.backup(path)`: export a captured committed snapshot while writers may
+  continue; destination must be new. Returns generation, record count and bytes.
+- `verify_backup(path)` / `restore_backup(input, destination)`: strict read-only
+  validation and bounded no-overwrite restore. See [backup semantics and failure
+  recovery](docs/BACKUPS.md); CRC verification is not authentication.
 
 Native Base callers explicitly release returned `interop.Reference` carriers.
 Luce owns them through its normal managed-object lifetime. Explicit `close()` is
@@ -133,9 +138,9 @@ before closing it. Transactions and facade objects themselves are worker-local.
 These are format/admission limits, **not an aggregate memory guarantee**. Old
 snapshots and uncommitted transactions retain memory; callers must also bound
 concurrency and lifetimes. Exceeding a limit fails explicitly. Explicit checkpoint/
-compaction is available; automatic/application migration, backup/restore, page cache,
-SQL, secondary-index planner, connectors,
-replication, encryption at rest, credentials, sessions, or permission system yet.
+compaction and verified new-destination backup/restore are available. There is no
+automatic/application migration, page cache, SQL, secondary-index planner, connector,
+replication, encryption at rest, credential, session, or permission system yet.
 The journal is replayed fully on open; it is not a disk-page B+tree. There are no
 throughput or power-failure certification claims.
 
@@ -174,6 +179,10 @@ and real concurrent HTTP clients plus server restart. The 200 deterministic
 storage-I/O cases additionally cover byte-cut failures, short/invalid transfers,
 file/directory sync and truncation failures, reopen barriers, retained snapshots,
 queued writer poisoning and per-store control isolation.
+The [backup suite](docs/BACKUPS.md#buffering-and-test-scope) additionally checks
+strict verification, no-overwrite restore, fault/heap/process boundaries, concurrent
+writers and actual HTTP worker exports. The larger-than-frame backup profile is
+`python3 tests/check_backup.py build/native3/backup_driver build/native3/checkpoint_driver --full`.
 CI repeats all six modes on Linux and macOS; see its run results for current status.
 The initial local results and untested boundaries are in [docs/VALIDATION.md](docs/VALIDATION.md).
 `tests/regressions/empty_span.lucb` is a known-failing upstream C-emission reproducer,
@@ -186,9 +195,10 @@ the workspace language-audit document records the issue without changing Base.
    measure memory/latency, notification-based waiting and optional group commit.
    The first bounded FIFO admission implementation is complete; it currently
    uses sleep polling.
-2. Extend explicit checkpoint/compaction with verified backup/restore, application
-   migrations, measured recovery/resource limits and an explicit aggregate memory
-   budget. Disk-page indexing remains a later storage-layout decision.
+2. Build application migrations, measured recovery/resource limits and an explicit
+   aggregate memory budget on checkpoint/backup/restore. Package-level backup
+   consistency and operational cutover remain separate gates. Disk-page indexing
+   remains a later storage-layout decision.
 3. Define native provider interfaces and typed users/invitations/packages repositories;
    add a worker-safe facade factory usable from high-level Luce server applications.
 4. Build `luce-auth` on audited native cryptography and atomic one-use invitations;

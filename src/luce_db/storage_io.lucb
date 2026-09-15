@@ -7,11 +7,47 @@ import c
 import files
 import io
 import os
-from luce_db.bytes import invalid
+import platform
+from luce_db.bytes import invalid, busy
 
 extern func fsync(descriptor: i32) -> i32
 extern func renameat(source_directory: i32, source: c.str, target_directory: i32, target: c.str) -> i32
 extern func unlinkat(directory: i32, name: c.str, flags: i32) -> i32
+extern func renameat2(source_directory: i32, source: c.str, target_directory: i32, target: c.str, flags: u32) -> i32
+extern func renameatx_np(source_directory: i32, source: c.str, target_directory: i32, target: c.str, flags: u32) -> i32
+
+## O_CREAT without O_EXCL can race another creator and report ENOENT on the
+## tested host. Open existing or create exclusively; retry only a creation loser.
+## Never remove/recreate a published lock inode. Caller validates it and flocks it.
+pub func open_lock_file(directory: files.Directory*, name: c.str) -> files.File!:
+    for attempt in 0..<128:
+        let existing: files.File? = directory.open_file(name, files.OpenMode.read_write, follow_symlinks = false, nonblocking = true) catch failure:
+            if failure.code != files.missing: error(failure.code, failure.message)
+            recover none
+        if let file = existing: return file
+        let created = directory.open_file(name, files.OpenMode.create_new_read_write, 384, follow_symlinks = false, nonblocking = true) catch failure:
+            if failure.code == files.already_exists: continue
+            error(failure.code, failure.message)
+        return created
+    error(busy, "database lock creation retry bound reached")
+
+## Atomic no-replace; unsupported platforms/filesystems fail without a fallback.
+pub func publish(context: void*?, directory: files.Directory*, source: c.str, target: c.str, possibly_published: bool*) -> !:
+    discard(context)
+    *possibly_published = false
+    if platform.windows: error(invalid, "backup publication requires POSIX")
+    let descriptor = try directory.descriptor()
+    *possibly_published = true
+    var result: i32
+    if platform.macos:
+        result = renameatx_np(descriptor, source, descriptor, target, 4)
+    else:
+        result = renameat2(descriptor, source, descriptor, target, 1)
+    if result != 0:
+        if c.errno() == 17:
+            *possibly_published = false
+            error(files.already_exists, "backup destination already exists")
+        error(io.failed, "exclusive backup publication failed; outcome may be uncertain")
 
 func system_random(context: void*?, buffer: u8[]) -> !:
     discard(context)
@@ -80,6 +116,7 @@ pub struct Controls:
     pub var close: func(void*?, files.File*) -> unit! = system_close
     pub var replace: func(void*?, files.Directory*, c.str, c.str, bool*) -> unit! = replace
     pub var remove: func(void*?, files.Directory*, c.str) -> unit! = remove
+    pub var publish: func(void*?, files.Directory*, c.str, c.str, bool*) -> unit! = publish
 
 pub struct Stream: io.Reader, io.Writer:
     pub var file: files.File*

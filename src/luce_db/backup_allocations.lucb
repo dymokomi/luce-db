@@ -1,0 +1,115 @@
+## Scoped heap accounting; no worker threads exist while memory.heap is replaced.
+import memory
+import luce_db.engine as engine
+import luce_db.backup as backup
+
+struct Block:
+    var address: u8*?
+    var size: usize
+
+struct Heap: memory.Allocator:
+    var parent: memory.Allocator
+    var blocks: Block[128]
+    var attempts: usize
+    var fail_at: usize
+    var persistent: bool
+    var refused: usize
+    var live: usize
+    var live_bytes: usize
+    var peak: usize
+
+    pub mutating func allocate(size: usize, alignment: usize) -> u8[]?:
+        self.attempts += 1
+        if self.fail_at > 0 and (self.attempts == self.fail_at or (self.persistent and self.attempts >= self.fail_at)):
+            self.refused += 1
+            return none
+        let data = self.parent.allocate(size, alignment) else trap("upstream allocation failed")
+        assert(data.length == size and size > 0)
+        for block in self.blocks: assert(block.address != data.data)
+        for i in 0..<self.blocks.length:
+            if self.blocks[i].address == none:
+                self.blocks[i] = Block(address = data.data, size = size)
+                self.live += 1
+                self.live_bytes += size
+                if self.live_bytes > self.peak: self.peak = self.live_bytes
+                return data
+        trap("backup allocation ledger full")
+
+    pub mutating func resize(data: u8[], size: usize) -> bool:
+        discard(data)
+        discard(size)
+        return false
+
+    pub mutating func release(data: u8[]):
+        for i in 0..<self.blocks.length:
+            if self.blocks[i].address == data.data:
+                assert(self.blocks[i].size == data.length)
+                self.live -= 1
+                self.live_bytes -= data.length
+                self.blocks[i] = Block()
+                self.parent.release(data)
+                return
+        trap("foreign/double backup free")
+
+func restore_heap(parent: memory.Allocator):
+    memory.heap = parent
+
+func probe(store: engine.Store*, source: str, target: str, operation: usize, at: usize, persistent: bool) -> usize!:
+    let original = memory.heap
+    var heap = Heap(parent = original, fail_at = at, persistent = persistent)
+    memory.heap = &heap
+    defer restore_heap(original)
+    var refused = false
+    var info: backup.Info
+    if operation == 0:
+        info = engine.backup_to(store, target) catch failure:
+            assert(failure.code == memory.exhausted and at > 0)
+            refused = true
+            recover backup.Info(0, 0, 0)
+    elif operation == 1:
+        info = backup.verify(source) catch failure:
+            assert(failure.code == memory.exhausted and at > 0)
+            refused = true
+            recover backup.Info(0, 0, 0)
+    else:
+        info = backup.restore(source, target) catch failure:
+            assert(failure.code == memory.exhausted and at > 0)
+            refused = true
+            recover backup.Info(0, 0, 0)
+    assert(refused == (at > 0))
+    if not refused: assert(info.generation == 1 and info.records == 2)
+    assert(heap.live == 0 and heap.live_bytes == 0)
+    assert(heap.refused == (1 if at > 0 else 0))
+    assert(not engine.statistics(store).needs_reopen and engine.statistics(store).active_views == 0)
+    assert(heap.peak < 131072, "small backup unexpectedly retained a large buffer/index")
+    return heap.attempts
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    let store = try engine.open(arguments[1])
+    defer engine.drop(store)
+    var tx = try engine.transaction(store)
+    defer tx.close()
+    try tx.put("first", b"one")
+    try tx.put("second", b"two")
+    assert(try tx.commit() == 1)
+    var source_buffer: u8[4096]
+    let source = try format(source_buffer, f"{arguments[1]}.backup")
+    discard(try engine.backup_to(store, source))
+    var cases: usize
+    for operation in 0..<(usize)3:
+        var scratch: u8[4096]
+        let target = try format(scratch, f"{arguments[1]}.baseline-{operation}")
+        let attempts = try probe(store, source, target, operation, 0, false)
+        assert(attempts > 1 and attempts < 32)
+        for persistent in [false, true]:
+            for at in 1..<attempts + 1:
+                var name: u8[4096]
+                let destination = try format(name, f"{arguments[1]}.fault-{operation}-{persistent}-{at}")
+                assert(try probe(store, source, destination, operation, at, persistent) == at)
+                ## Same destination must remain reusable, with ownership released.
+                assert(try probe(store, source, destination, operation, 0, false) == attempts)
+                cases += 1
+        print(f"ALLOCATIONS backup operation={operation} count={attempts}")
+    print(f"PASS {cases} backup/export/verify/restore single-shot and persistent heap failures; no live blocks")
+    return 0

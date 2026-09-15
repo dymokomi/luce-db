@@ -167,7 +167,9 @@ were removed after verification; archives/logs were retained. The transient test
 unit was absent/inactive, and before/after live-service and HTTPS checks matched.
 No live configuration, application data or credentials changed.
 
-Remaining work: backup/export/restore and consistency verification, application
-migrations, aggregate admission, measured large-store latency/memory/recovery,
+The subsequent [backup/restore implementation](BACKUPS.md) builds on this base
+format; its separate validation status is recorded there. Remaining work includes
+application/package backup consistency, migrations, aggregate admission, measured
+large-store latency/memory/recovery,
 notification-based waiting/cancellation/group commit and independent review.
 Checkpoint is not a backup: it intentionally discards obsolete history.

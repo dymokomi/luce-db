@@ -30,17 +30,24 @@ def check(executable):
 
                 if restart == 0:
                     assert request("POST", "/claim/INVALID")[0] == 400
-                    with ThreadPoolExecutor(max_workers=32) as pool:
+                    assert request("POST", "/backup/invalid")[0] == 400
+                    with ThreadPoolExecutor(max_workers=40) as pool:
                         claims = [pool.submit(request, "POST", f"/claim/user{i}") for i in range(32)]
                         checkpoints = [pool.submit(request, "POST", "/checkpoint") for _ in range(4)]
+                        backups = [pool.submit(request, "POST", "/backup/0") for _ in range(4)]
                         responses = [future.result() for future in claims]
                         for future in checkpoints:
                             code, checkpoint_generation = future.result()
                             assert code == 200 and int(checkpoint_generation) in (1, 2)
+                        backup_responses = [future.result() for future in backups]
+                        assert [code for code, _ in backup_responses].count(201) == 1, backup_responses
+                        assert [code for code, _ in backup_responses].count(409) == 3, backup_responses
                     assert [status for status, _ in responses].count(201) == 1, responses
                     assert [status for status, _ in responses].count(409) == 31, responses
                 else:
                     assert request("POST", "/claim/late")[0] == 409
+                    assert request("POST", "/backup/0")[0] == 409
+                    assert request("POST", "/backup/1")[0] == 201
                 status, state = request("GET", "/state")
                 generation, count, peak = map(int, state.split())
                 assert status == 200 and generation == 2 and count == 2
@@ -49,6 +56,12 @@ def check(executable):
                 assert request("POST", "/stop")[0] == 200
                 stdout, stderr = process.communicate(timeout=15)
                 assert process.returncode == 0, (stdout, stderr)
+            except BaseException:
+                if process.poll() is None:
+                    process.kill()
+                stdout, stderr = process.communicate(timeout=10)
+                print(f"HTTP fixture stdout={stdout!r} stderr={stderr!r}", flush=True)
+                raise
             finally:
                 if process.poll() is None:
                     process.kill()
@@ -58,4 +71,12 @@ def check(executable):
         users = [key for key in state if key.startswith(b"user/")]
         assert len(users) == 1 and state[b"audit/registration"] == state[users[0]]
         assert b"invite/test-only" not in state and generation == 2
-        print("PASS HTTP: 32 competing claims, one winner, overlapping workers, atomic audit, concurrent checkpoints, restart", flush=True)
+        for slot in (0, 1):
+            data = Path(str(path) + f".backup-{slot}").read_bytes()
+            backup_generation, backup_state, end = decode(data)
+            assert end == len(data)
+            if backup_generation == 1:
+                assert slot == 0 and backup_state == {b"invite/test-only": b"one claim"}
+            else:
+                assert backup_generation == 2 and backup_state == state
+        print("PASS HTTP: 32 competing claims, one winner, overlapping workers, atomic audit, concurrent checkpoints/backups, restart", flush=True)

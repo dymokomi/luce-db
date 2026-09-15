@@ -1,0 +1,115 @@
+import c
+import files
+import io
+import thread
+import luce_db.engine as engine
+import luce_db.backup as backup
+import luce_db.storage_io as storage
+from luce_db.bytes import compare, busy, uncertain
+
+struct Gate:
+    var phase: usize
+    var entered: @u32
+    var released: @u32
+
+func state(raw: void*?) -> Gate*:
+    return (Gate*)(raw else trap("missing backup gate"))
+
+func pause(gate: Gate*, phase: usize):
+    if gate.phase == phase or (gate.phase == 3 and phase == 1):
+        gate.entered.store(1, .release)
+        while gate.released.load(.acquire) == 0: thread.sleep(1)
+
+func synchronize(raw: void*?, file: files.File*) -> !:
+    try file.sync()
+    pause(state(raw), 0)
+
+func publish(raw: void*?, directory: files.Directory*, source: c.str, target: c.str, possible: bool*) -> !:
+    try storage.publish(none, directory, source, target, possible)
+    let gate = state(raw)
+    pause(gate, 1)
+    if gate.phase == 3: error(io.failed, "gated backup publication failure")
+
+func directory_sync(raw: void*?, directory: files.Directory*) -> !:
+    try storage.sync_directory(directory)
+    pause(state(raw), 2)
+
+struct Job:
+    var store: engine.Store*
+    var target: str
+    var controls: storage.Controls
+    var result: backup.Info
+    var uncertain: bool
+
+func work(raw: void*?):
+    let job = (Job*)(raw else trap("missing backup job"))
+    job.result = engine.backup_to(job.store, job.target, job.controls) catch failure:
+        assert(failure.code == uncertain)
+        job.uncertain = true
+        recover backup.Info(0, 0, 0)
+
+func one(path: str, phase: usize) -> !:
+    let store = try engine.open(path)
+    defer engine.drop(store)
+    var tx = try engine.transaction(store)
+    defer tx.close()
+    try tx.put("base", b"old")
+    assert(try tx.commit() == 1)
+    var old = try engine.snapshot(store)
+    defer old.close()
+    var scratch: u8[4096]
+    let target = try format(scratch, f"{path}.backup")
+    var gate = Gate(phase = phase)
+    var job = Job(store = store, target = target, controls = storage.Controls(context = &gate,
+        sync = synchronize, publish = publish, directory_sync = directory_sync))
+    let worker = try thread.spawn(work, &job, stack = 524288)
+    for i in 0..<5000:
+        if gate.entered.load(.acquire) == 1: break
+        thread.sleep(1)
+    assert(gate.entered.load(.acquire) == 1)
+    ## Admission remains free while the exporter is actually inside storage I/O.
+    var next = try engine.transaction(store)
+    defer next.close()
+    try next.put("base", b"new")
+    try next.put("after", b"commit")
+    assert(try next.commit() == 2)
+    assert(try engine.checkpoint(store) == 2)
+    var during = try engine.snapshot(store)
+    assert(during.generation == 2 and try during.get("after") != none)
+    during.close()
+    assert(try old.get("after") == none and old.generation == 1)
+    var refused: usize
+    let contender: engine.Store*? = engine.open(target) catch failure:
+        assert(failure.code == busy)
+        refused += 1
+        recover none
+    assert(contender == none)
+    discard(engine.backup_to(store, target) catch failure:
+        assert(failure.code == busy)
+        refused += 1
+        recover backup.Info(0, 0, 0))
+    assert(refused == 2)
+    let before = try files.read_limit((c.str)path, 4096)
+    defer free(before)
+    gate.released.store(1, .release)
+    try worker.join()
+    let after = try files.read_limit((c.str)path, 4096)
+    defer free(after)
+    assert(compare(before, after) == 0)
+    assert(job.uncertain == (phase == 3))
+    if not job.uncertain: assert(job.result.generation == 1 and job.result.records == 1)
+    assert((try backup.verify(target)).generation == 1)
+    let reopened = try engine.open(target)
+    assert(engine.statistics(reopened).generation == 1 and engine.statistics(reopened).records == 1)
+    engine.drop(reopened)
+    assert(not engine.statistics(store).needs_reopen and engine.statistics(store).generation == 2)
+    old.close()
+    assert(engine.statistics(store).active_views == 0)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    for phase in 0..<(usize)4:
+        var scratch: u8[4096]
+        try one(try format(scratch, f"{arguments[1]}-{phase}"), phase)
+    print("PASS 4 gated backup/concurrent-commit/checkpoint/reader/destination-lock/source-health scenarios")
+    return 0

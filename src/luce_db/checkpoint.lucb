@@ -116,10 +116,11 @@ pub func write(file: files.File*, controls: storage.Controls, root: tree.Node*?,
 pub struct Base:
     pub var root: tree.Node*?
     pub var generation: u64
+    pub var records: usize
     pub var end: i64
 
 ## Called with the descriptor positioned after the already-validated 16-byte magic.
-pub func read(file: files.File*, controls: storage.Controls, size: i64) -> Base!:
+pub func read(file: files.File*, controls: storage.Controls, size: i64, build_index: bool = true) -> Base!:
     if size < 64 or size > max_bytes: error(corrupt, "incomplete checkpoint base")
     var prefix: u8[32]
     try storage.read_exact(file, controls, prefix)
@@ -139,6 +140,8 @@ pub func read(file: files.File*, controls: storage.Controls, size: i64) -> Base!
     var root: tree.Node*?
     errdefer tree.drop(root)
     var previous: tree.Entry*?
+    var previous_key: Buffer
+    defer previous_key.close()
     var data: Buffer
     defer data.close()
     var remaining = data_size
@@ -162,6 +165,8 @@ pub func read(file: files.File*, controls: storage.Controls, size: i64) -> Base!
         valid_key((str)key) catch failure: error(corrupt, "invalid checkpoint key")
         if let prior = previous:
             if compare(prior.key.span(), key) >= 0: error(corrupt, "checkpoint keys are duplicated or unordered")
+        if not build_index and previous_key.count > 0:
+            if compare(previous_key.span(), key) >= 0: error(corrupt, "checkpoint keys are duplicated or unordered")
         var trailer: u8[8]
         try storage.read_exact(file, controls, trailer)
         var crc = Crc32()
@@ -173,12 +178,16 @@ pub func read(file: files.File*, controls: storage.Controls, size: i64) -> Base!
         aggregate.update(record)
         aggregate.update(data.span())
         aggregate.update(trailer)
-        let item = try tree.entry(key, data.span()[key_size..])
-        defer tree.drop_entry(item)
-        let next = try tree.put(root, item)
-        tree.drop(root)
-        root = next
-        previous = item
+        if build_index:
+            let item = try tree.entry(key, data.span()[key_size..])
+            defer tree.drop_entry(item)
+            let next = try tree.put(root, item)
+            tree.drop(root)
+            root = next
+            previous = item
+        else:
+            previous_key.count = 0
+            try previous_key.put(key)
         remaining -= (u64)length + 24
     if remaining != 0: error(corrupt, "checkpoint record count/byte mismatch")
     var footer: u8[16]
@@ -186,4 +195,4 @@ pub func read(file: files.File*, controls: storage.Controls, size: i64) -> Base!
     var end = Reader(bytes = footer)
     if compare(try end.take(8), b"BASE-END") != 0 or try end.uint(4) != (u64)aggregate.finish() or try end.uint(4) != (u64)checksum(footer[..<12]):
         error(corrupt, "invalid checkpoint completeness footer")
-    return Base(root = root, generation = generation, end = 64 + (i64)data_size)
+    return Base(root = root, generation = generation, records = (usize)records, end = 64 + (i64)data_size)

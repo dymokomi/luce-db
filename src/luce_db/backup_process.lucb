@@ -1,0 +1,77 @@
+## Process-observable backup export/restore test fixture. Disposable inputs only.
+import c
+import files
+import io
+import luce_db.engine as engine
+import luce_db.backup as backup
+import luce_db.storage_io as storage
+
+struct Pause:
+    var tag: str
+    var read_once: bool
+
+func state(raw: void*?) -> Pause*:
+    return (Pause*)(raw else trap("missing backup process phase"))
+
+func pause(tag: str, control: Pause*):
+    if tag != control.tag: return
+    print(f"PHASE {tag}")
+    io.flush_stdout() catch failure: trap(failure.message)
+    var token: u8[1]
+    io.read_exact(io.stdin(), token) catch failure: trap(failure.message)
+
+func create(raw: void*?, directory: files.Directory*, name: c.str) -> files.File!:
+    let normal = storage.Controls()
+    let file = try normal.create(none, directory, name)
+    pause("create", state(raw))
+    return file
+
+func read(raw: void*?, file: files.File*, data: u8[]) -> usize!:
+    let control = state(raw)
+    if not control.read_once:
+        control.read_once = true
+        pause("read", control)
+    return try file.read(data)
+
+func write(raw: void*?, file: files.File*, data: const u8[]) -> usize!:
+    let control = state(raw)
+    if control.tag == "write":
+        let count = try file.write(data[..<(20 if data.length > 20 else data.length)])
+        pause("write", control)
+        return count
+    return try file.write(data)
+
+func synchronize(raw: void*?, file: files.File*) -> !:
+    try file.sync()
+    pause("file_sync", state(raw))
+
+func publish(raw: void*?, directory: files.Directory*, source: c.str, target: c.str, possible: bool*) -> !:
+    pause("rename_before", state(raw))
+    try storage.publish(none, directory, source, target, possible)
+    pause("rename_after", state(raw))
+
+func directory_sync(raw: void*?, directory: files.Directory*) -> !:
+    try storage.sync_directory(directory)
+    pause("directory_sync", state(raw))
+
+func close(raw: void*?, file: files.File*) -> !:
+    try file.close()
+    pause("close", state(raw))
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 5)
+    var control = Pause(tag = arguments[2])
+    let hooks = storage.Controls(context = &control, create = create, read = read,
+        write = write, sync = synchronize, publish = publish, directory_sync = directory_sync,
+        close = close)
+    if arguments[1] == "export":
+        let store = try engine.open(arguments[3])
+        defer engine.drop(store)
+        discard(try engine.backup_to(store, arguments[4], hooks))
+    elif arguments[1] == "restore":
+        discard(try backup.restore(arguments[3], arguments[4], hooks))
+    else:
+        trap("unknown backup process mode")
+    pause("returned", &control)
+    print("PASS process backup")
+    return 0

@@ -6,8 +6,10 @@ import interop
 import thread
 import memory
 import io
+import files
 
 var shared_database: db.Database*?
+var shared_path: str
 var active: @u64
 var peak: @u64
 
@@ -82,6 +84,20 @@ struct Handlers:
         let text = format(scratch, f"{generation}") catch failure: return failed(failure.code, failure.message)
         return reply(text)
 
+    func export_backup(request: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let database = shared_database else trap("missing database")
+        let slot = request.value().parameter("slot") else return reply("missing slot", 400)
+        if slot != "0" and slot != "1": return reply("invalid test slot", 400)
+        var path_buffer: u8[4096]
+        let path = format(path_buffer, f"{shared_path}.backup-{slot}") catch failure: return failed(failure.code, failure.message)
+        let info = database.backup(path) catch failure:
+            if failure.code == db.busy or failure.code == files.already_exists: return reply("destination unavailable", 409)
+            ## Disposable fixture: surface diagnostics to the independent checker.
+            return reply(failure.message, 500)
+        var scratch: u8[128]
+        let text = format(scratch, f"{info.generation} {info.records} {info.bytes}") catch failure: return failed(failure.code, failure.message)
+        return reply(text, 201)
+
     mutating func close(): discard(())
 
 func configure(data: str) -> interop.Outcome[http.Application]:
@@ -103,6 +119,9 @@ func configure(data: str) -> interop.Outcome[http.Application]:
     let compact = http.Handler.bind(handlers, Handlers.compact) catch failure: trap(failure.message)
     defer compact.release()
     router.post("/checkpoint", compact) catch failure: trap(failure.message)
+    let exporter = http.Handler.bind(handlers, Handlers.export_backup) catch failure: trap(failure.message)
+    defer exporter.release()
+    router.post("/backup/{slot}", exporter) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 
@@ -112,6 +131,7 @@ pub func main(arguments: str[]) -> i32!:
     defer free(database) in memory.heap
     defer database.close()
     shared_database = database
+    shared_path = arguments[1]
     let snapshot = try database.snapshot()
     defer snapshot.release()
     if try snapshot.value().generation() == 0:

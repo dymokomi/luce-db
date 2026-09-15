@@ -1,4 +1,4 @@
-from db import Database
+from db import Database, verify_backup, restore_backup
 
 pub func main(arguments: list[str]) -> int!:
     let database = Database(arguments[0])
@@ -15,6 +15,16 @@ pub func main(arguments: list[str]) -> int!:
     assert(snapshot.count() == 2)
     let value = snapshot.get("user/alice") else return 1
     assert(value.text() == "Alice")
+    let backup_path = f"{arguments[0]}.backup"
+    let restore_path = f"{arguments[0]}.restored"
+    let info = database.backup(backup_path)
+    assert(info.generation == 1 and info.records == 2 and info.bytes > 64)
+    assert(verify_backup(backup_path).bytes == info.bytes)
+    assert(restore_backup(backup_path, restore_path).generation == 1)
+    let restored = Database(restore_path)
+    let restored_value = restored.snapshot().get("user/alice") else return 1
+    assert(restored_value.text() == "Alice")
+    restored.close()
     assert(database.checkpoint(wait_ms = 1000) == 1)
     assert(snapshot.generation() == 1 and snapshot.count() == 2)
     assert(value.text() == "Alice")
@@ -27,5 +37,5 @@ pub func main(arguments: list[str]) -> int!:
     assert(reopened.snapshot().generation() == 1)
     assert(reopened.statistics().queued_attempts == 0)
     reopened.close()
-    print("PASS Luce facade, ownership, reopen")
+    print("PASS Luce facade, ownership, reopen, verified backup/restore")
     return 0

@@ -1,0 +1,21 @@
+## Disposable CLI fixture for independent backup/restore checks. Not an operator CLI.
+import db
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3 or arguments.length == 4)
+    var info: db.BackupInfo
+    if arguments[1] == "verify":
+        assert(arguments.length == 3)
+        info = try db.verify_backup(arguments[2])
+    elif arguments[1] == "restore":
+        assert(arguments.length == 4)
+        info = try db.restore_backup(arguments[2], arguments[3])
+    elif arguments[1] == "export":
+        assert(arguments.length == 4)
+        var database = try db.Database(arguments[2])
+        defer database.close()
+        info = try database.backup(arguments[3])
+    else:
+        trap("unknown backup test operation")
+    print(f"BACKUP {info.generation} {info.records} {info.bytes}")
+    return 0

@@ -136,7 +136,7 @@ pub func open(path: str, controls: storage_io.Controls = storage_io.Controls()) 
     let lock_name = try format(scratch, f"{file_name}.lock")
     var directory = try files.Directory.open((c.str)directory_name, follow_symlinks = false)
     errdefer directory.destroy()
-    var lock_file = try directory.open_file((c.str)lock_name, files.OpenMode.append, 384, follow_symlinks = false, nonblocking = true)
+    var lock_file = try storage_io.open_lock_file(&directory, (c.str)lock_name)
     errdefer lock_file.destroy()
     if (try lock_file.metadata()).kind != files.FileKind.regular:
         error(invalid, "database lock is not a regular file")

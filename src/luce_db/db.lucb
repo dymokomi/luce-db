@@ -2,6 +2,7 @@
 import luce_db.bytes
 import luce_db.engine as engine
 import luce_db.tree as tree
+import luce_db.backup as backup
 import interop
 import memory
 import utf8
@@ -15,6 +16,13 @@ pub let corrupt = bytes.corrupt
 pub let uncertain = bytes.uncertain
 pub let timed_out = bytes.timed_out
 pub type Statistics = engine.Statistics
+pub type BackupInfo = backup.Info
+
+pub func verify_backup(path: str) -> BackupInfo!:
+    return try backup.verify(path)
+
+pub func restore_backup(path: str, destination: str) -> BackupInfo!:
+    return try backup.restore(path, destination)
 
 ## Owned immutable value. Binary/text views live until Value.close/release.
 pub struct Value:
@@ -138,6 +146,12 @@ pub struct Database:
     pub func checkpoint(wait_ms: i64 = 0) -> i64!:
         let store = self.store else error(closed, "database is closed")
         return (i64)try engine.checkpoint(store, wait_ms)
+
+    ## Export one committed snapshot without blocking writers during storage I/O.
+    ## Destination must be new. An uncertain error requires inspecting that path.
+    pub func backup(path: str) -> BackupInfo!:
+        let store = self.store else error(closed, "database is closed")
+        return try engine.backup_to(store, path)
 
     pub mutating func close():
         if let store = self.store: engine.drop(store)
