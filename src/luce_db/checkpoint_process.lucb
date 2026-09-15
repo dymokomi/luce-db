@@ -1,0 +1,80 @@
+## Phase-observable fixture for process termination and operator-path changes.
+import c
+import files
+import io
+import luce_db.engine as engine
+import luce_db.storage_io as storage
+import luce_db.bytes as bytes
+
+struct Pause:
+    var tag: str
+    var armed: bool
+
+func state(raw: void*?) -> Pause*:
+    return (Pause*)(raw else trap("missing phase state"))
+
+func pause(at: str, control: Pause*):
+    if not control.armed or at != control.tag: return
+    print(f"PHASE {at}")
+    io.flush_stdout() catch failure: trap(failure.message)
+    var token: u8[1]
+    io.read_exact(io.stdin(), token) catch failure: trap(failure.message)
+
+func create(raw: void*?, directory: files.Directory*, name: c.str) -> files.File!:
+    let normal = storage.Controls()
+    let file = try normal.create(none, directory, name)
+    pause("create", state(raw))
+    return file
+
+func write(raw: void*?, file: files.File*, data: const u8[]) -> usize!:
+    let control = state(raw)
+    if control.armed and control.tag == "write":
+        let count = try file.write(data[..<(20 if data.length > 20 else data.length)])
+        pause("write", control)
+        return count
+    return try file.write(data)
+
+func synchronize(raw: void*?, file: files.File*) -> !:
+    try file.sync()
+    pause("file_sync", state(raw))
+
+func replace(raw: void*?, directory: files.Directory*, source: c.str, target: c.str, published: bool*) -> !:
+    pause("rename_before", state(raw))
+    try storage.replace(none, directory, source, target, published)
+    pause("rename_after", state(raw))
+
+func directory_sync(raw: void*?, directory: files.Directory*) -> !:
+    try storage.sync_directory(directory)
+    pause("directory_sync", state(raw))
+
+func close(raw: void*?, file: files.File*) -> !:
+    try file.close()
+    pause("close", state(raw))
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    var control = Pause(tag = arguments[1])
+    let hooks = storage.Controls(context = &control, create = create, write = write,
+        sync = synchronize, replace = replace, directory_sync = directory_sync, close = close)
+    let store = try engine.open(arguments[2], hooks)
+    defer engine.drop(store)
+    var before = try engine.snapshot(store)
+    defer before.close()
+    control.armed = true
+    pause("relocate", &control)
+    pause("identity", &control)
+    if control.tag == "identity":
+        var refused = false
+        discard(engine.checkpoint(store) catch failure:
+            assert(failure.code == bytes.uncertain)
+            refused = true
+            recover 0)
+        assert(refused and engine.statistics(store).needs_reopen)
+        assert(try before.get("user/bob") != none)
+        print("PASS identity mismatch poisons without overwrite; old snapshot readable")
+    else:
+        assert(try engine.checkpoint(store) == before.generation)
+        pause("returned", &control)
+        assert(try before.get("user/bob") != none)
+        print("PASS process checkpoint")
+    return 0

@@ -133,6 +133,12 @@ pub struct Database:
         let store = self.store else error(closed, "database is closed")
         return engine.statistics(store)
 
+    ## Reclaim obsolete journal history without changing committed generation.
+    ## Admission is bounded like commit; replacement I/O itself is not timed out.
+    pub func checkpoint(wait_ms: i64 = 0) -> i64!:
+        let store = self.store else error(closed, "database is closed")
+        return (i64)try engine.checkpoint(store, wait_ms)
+
     pub mutating func close():
         if let store = self.store: engine.drop(store)
         self.store = none

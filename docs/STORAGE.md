@@ -1,5 +1,9 @@
 # Experimental journal format 001
 
+Both format 001 and checkpoint-capable [format 002](CHECKPOINTS.md) are supported.
+Normal creation still writes 001; only an explicit checkpoint upgrades a file.
+The following transaction frame definition is shared by both versions.
+
 This format is intentionally small and documented for independent verification.
 It is not a stable public format until migration/checkpoint design is complete.
 All integers are unsigned little-endian. CRC32 is IEEE CRC32 (the same result as

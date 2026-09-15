@@ -5,7 +5,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from check_journal import line, decode
+from check_journal import line
+from check_checkpoint import decode
 
 
 def check(executable):
@@ -30,7 +31,12 @@ def check(executable):
                 if restart == 0:
                     assert request("POST", "/claim/INVALID")[0] == 400
                     with ThreadPoolExecutor(max_workers=32) as pool:
-                        responses = list(pool.map(lambda i: request("POST", f"/claim/user{i}"), range(32)))
+                        claims = [pool.submit(request, "POST", f"/claim/user{i}") for i in range(32)]
+                        checkpoints = [pool.submit(request, "POST", "/checkpoint") for _ in range(4)]
+                        responses = [future.result() for future in claims]
+                        for future in checkpoints:
+                            code, checkpoint_generation = future.result()
+                            assert code == 200 and int(checkpoint_generation) in (1, 2)
                     assert [status for status, _ in responses].count(201) == 1, responses
                     assert [status for status, _ in responses].count(409) == 31, responses
                 else:
@@ -39,6 +45,7 @@ def check(executable):
                 generation, count, peak = map(int, state.split())
                 assert status == 200 and generation == 2 and count == 2
                 if restart == 0: assert peak >= 2, "application handlers never overlapped"
+                assert request("POST", "/checkpoint") == (200, "2")
                 assert request("POST", "/stop")[0] == 200
                 stdout, stderr = process.communicate(timeout=15)
                 assert process.returncode == 0, (stdout, stderr)
@@ -46,8 +53,9 @@ def check(executable):
                 if process.poll() is None:
                     process.kill()
                     process.communicate(timeout=10)
-        generation, state = decode(path.read_bytes())
+        generation, state, end = decode(path.read_bytes())
+        assert end == path.stat().st_size
         users = [key for key in state if key.startswith(b"user/")]
         assert len(users) == 1 and state[b"audit/registration"] == state[users[0]]
         assert b"invite/test-only" not in state and generation == 2
-        print("PASS HTTP: 32 competing claims, one winner, overlapping workers, atomic audit, restart", flush=True)
+        print("PASS HTTP: 32 competing claims, one winner, overlapping workers, atomic audit, concurrent checkpoints, restart", flush=True)

@@ -176,3 +176,26 @@ pub struct Transaction:
 
 pub func transaction(store: Store*) -> Transaction!:
     return Transaction(view = try snapshot(store))
+
+pub func checkpoint(store: Store*, wait_ms: i64 = 0) -> u64!:
+    hold(store)
+    defer drop(store)
+    try store.writer.enter(wait_ms)
+    defer store.writer.leave()
+    store.head_lock.lock()
+    let poisoned = store.poisoned
+    let generation = store.generation
+    let root = tree.hold(store.root)
+    store.head_lock.unlock()
+    defer tree.drop(root)
+    if poisoned: error(uncertain, "database needs reopen after uncertain I/O")
+    store.log.compact(root, generation) catch failure:
+        if failure.code == uncertain:
+            store.head_lock.lock()
+            store.poisoned = true
+            store.head_lock.unlock()
+        error(failure.code, failure.message)
+    store.head_lock.lock()
+    store.published_bytes = store.log.position
+    store.head_lock.unlock()
+    return generation

@@ -54,6 +54,9 @@ jobs:
       - name: Memory safety instrumentation
         working-directory: luce-db
         run: python3 tests/sanitize.py
+      - name: Checkpoint larger than one transaction frame
+        working-directory: luce-db
+        run: python3 tests/check_checkpoint.py build/native3/checkpoint_driver --full
       - name: Package Linux test binaries
         if: runner.os == 'Linux'
         working-directory: luce-db

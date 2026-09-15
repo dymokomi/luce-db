@@ -6,9 +6,41 @@
 import c
 import files
 import io
+import os
 from luce_db.bytes import invalid
 
 extern func fsync(descriptor: i32) -> i32
+extern func renameat(source_directory: i32, source: c.str, target_directory: i32, target: c.str) -> i32
+extern func unlinkat(directory: i32, name: c.str, flags: i32) -> i32
+
+func system_random(context: void*?, buffer: u8[]) -> !:
+    discard(context)
+    try os.random_bytes(buffer)
+
+func system_create(context: void*?, directory: files.Directory*, name: c.str) -> files.File!:
+    discard(context)
+    return try directory.open_file(name, files.OpenMode.create_new_read_write, 384, follow_symlinks = false, nonblocking = true)
+
+func system_close(context: void*?, file: files.File*) -> !:
+    discard(context)
+    try file.close()
+
+## Set possibly_published BEFORE the syscall. Conservatively treat every error
+## after attempting rename as uncertain; never retry an ambiguous rename blindly.
+pub func replace(context: void*?, directory: files.Directory*, source: c.str, target: c.str, possibly_published: bool*) -> !:
+    discard(context)
+    *possibly_published = false
+    let descriptor = try directory.descriptor()
+    *possibly_published = true
+    if renameat(descriptor, source, descriptor, target) != 0:
+        error(io.failed, "checkpoint rename failed; publication may have occurred")
+
+pub func remove(context: void*?, directory: files.Directory*, name: c.str) -> !:
+    discard(context)
+    let descriptor = try directory.descriptor()
+    if unlinkat(descriptor, name, 0) != 0:
+        if c.errno() == 2: return
+        error(io.failed, "checkpoint temporary cleanup failed")
 
 func system_read(context: void*?, file: files.File*, buffer: u8[]) -> usize!:
     discard(context)
@@ -43,6 +75,11 @@ pub struct Controls:
     pub var sync: func(void*?, files.File*) -> unit! = system_sync
     pub var truncate: func(void*?, files.File*, i64) -> unit! = system_truncate
     pub var directory_sync: func(void*?, files.Directory*) -> unit! = system_directory_sync
+    pub var random: func(void*?, u8[]) -> unit! = system_random
+    pub var create: func(void*?, files.Directory*, c.str) -> files.File! = system_create
+    pub var close: func(void*?, files.File*) -> unit! = system_close
+    pub var replace: func(void*?, files.Directory*, c.str, c.str, bool*) -> unit! = replace
+    pub var remove: func(void*?, files.Directory*, c.str) -> unit! = remove
 
 pub struct Stream: io.Reader, io.Writer:
     pub var file: files.File*

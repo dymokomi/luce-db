@@ -9,7 +9,8 @@ import platform
 import strings
 import luce_db.tree as tree
 import luce_db.storage_io as storage_io
-from luce_db.bytes import Buffer, Reader, checksum, compare, valid_key, max_key, max_value, max_frame, corrupt, invalid, busy, limit
+import luce_db.checkpoint as checkpoint
+from luce_db.bytes import Buffer, Reader, checksum, compare, valid_key, max_key, max_value, max_frame, corrupt, invalid, busy, limit, uncertain
 
 extern func flock(descriptor: i32, flags: i32) -> i32
 
@@ -23,11 +24,18 @@ pub struct Journal:
     pub var position: i64
     pub var recovered_tail: i64
     var controls: storage_io.Controls
+    var filename: str
+    var name_owner: memory.Allocator?
 
     pub mutating func close():
         self.file.destroy()
         self.directory.destroy()
         self.lock_file.destroy()
+        if self.filename.length > 0:
+            let owner = self.name_owner else trap("journal name lost its allocator")
+            with owner: strings.release(self.filename)
+            self.filename = ""
+            self.name_owner = none
 
     pub mutating func append(frame: const u8[]) -> !:
         if (i64)frame.length > max_journal - self.position:
@@ -36,6 +44,81 @@ pub struct Journal:
         try self.controls.sync(self.controls.context, &self.file)
         self.position += (i64)frame.length
 
+    ## Serialize with append at the engine layer; readers own independent roots.
+    pub mutating func compact(root: tree.Node*?, generation: u64) -> !:
+        let size = try checkpoint.measure(root, generation)
+        try self.check_identity()
+        var candidate: u8[64]
+        var name: str
+        var replacement: files.File
+        defer replacement.destroy()
+        var owned = false
+        defer cleanup_if_owned(&self.directory, self.controls, &replacement, &name, &owned)
+        for attempt in 0..<128:
+            var random: u8[16]
+            try self.controls.random(self.controls.context, random)
+            var encoded_name: u8[32]
+            let digits = "0123456789abcdef".bytes
+            for i in 0..<16:
+                encoded_name[i * 2] = digits[random[i] >> 4]
+                encoded_name[i * 2 + 1] = digits[random[i] & 15]
+            name = try format(candidate, f".luce-db-{(str)encoded_name}")
+            replacement = self.controls.create(self.controls.context, &self.directory, (c.str)name) catch failure:
+                if failure.code == files.already_exists: continue
+                error(failure.code, failure.message)
+            owned = true
+            break
+        if not owned: error(busy, "no unused checkpoint temporary name")
+        let metadata = try replacement.metadata()
+        if metadata.kind != files.FileKind.regular or metadata.links != 1:
+            error(invalid, "checkpoint temporary file is not regular/single-link")
+        try checkpoint.write(&replacement, self.controls, root, generation, size)
+        try self.controls.sync(self.controls.context, &replacement)
+        if (try replacement.metadata()).size != size: error(invalid, "checkpoint file size mismatch")
+        try self.check_identity()
+        var published = false
+        self.controls.replace(self.controls.context, &self.directory, (c.str)name, (c.str)self.filename, &published) catch failure:
+            if published: error(uncertain, "checkpoint replacement outcome uncertain; reopen")
+            error(failure.code, failure.message)
+        owned = false
+        ## Success means publication regardless of whether a custom hook set its flag.
+        let published_metadata = self.directory.entry_metadata((c.str)self.filename, follow_symlinks = false) catch failure:
+            error(uncertain, "checkpoint published pathname cannot be verified; reopen")
+        if published_metadata.kind != files.FileKind.regular or published_metadata.device != metadata.device or published_metadata.inode != metadata.inode or published_metadata.links != 1:
+            error(uncertain, "checkpoint published identity changed; reopen")
+        self.controls.directory_sync(self.controls.context, &self.directory) catch failure:
+            error(uncertain, "checkpoint directory sync failed after publication; reopen")
+        var old = self.file
+        defer old.destroy()
+        self.file = replacement
+        replacement = files.File()
+        self.controls.close(self.controls.context, &old) catch failure:
+            error(uncertain, "checkpoint old journal close failed after publication; reopen")
+        self.position = size
+        self.recovered_tail = 0
+
+    func check_identity() -> !:
+        let opened = self.file.metadata() catch failure:
+            error(uncertain, "journal descriptor identity unavailable; reopen")
+        let named = self.directory.entry_metadata((c.str)self.filename, follow_symlinks = false) catch failure:
+            error(uncertain, "journal pathname identity unavailable; reopen")
+        if opened.kind != files.FileKind.regular or opened.links != 1 or opened.size != self.position or named.kind != files.FileKind.regular or named.links != 1 or opened.device != named.device or opened.inode != named.inode:
+            error(uncertain, "journal pathname/identity changed; checkpoint refused, reopen")
+
+func cleanup_owned(directory: files.Directory*, controls: storage_io.Controls, file: files.File*, name: str) -> !:
+    let opened = try file.metadata()
+    let named = directory.entry_metadata((c.str)name, follow_symlinks = false) catch failure:
+        if failure.code == files.missing: return
+        error(failure.code, failure.message)
+    if named.kind != files.FileKind.regular or named.device != opened.device or named.inode != opened.inode:
+        error(invalid, "checkpoint temporary name changed; cleanup refused")
+    try controls.remove(controls.context, directory, (c.str)name)
+
+func cleanup_if_owned(directory: files.Directory*, controls: storage_io.Controls, file: files.File*, name: str*, owned: bool*):
+    if *owned:
+        cleanup_owned(directory, controls, file, *name) catch failure:
+            discard(failure) ## Original error wins; an owned orphan may remain.
+
 pub func open(path: str, controls: storage_io.Controls = storage_io.Controls()) -> Journal!:
     if platform.windows:
         error(invalid, "database file locking is currently supported on POSIX only")
@@ -43,8 +126,10 @@ pub func open(path: str, controls: storage_io.Controls = storage_io.Controls()) 
         error(invalid, "invalid database path")
     let directory_name = try strings.copy(paths.directory(path))
     defer strings.release(directory_name)
-    let file_name = try strings.copy(paths.base(path))
-    defer strings.release(file_name)
+    let name_owner = memory.heap
+    var file_name: str
+    with name_owner: file_name = try strings.copy(paths.base(path))
+    errdefer release_name(file_name, name_owner)
     if file_name == "" or file_name == "." or file_name == "..":
         error(invalid, "database path needs a filename")
     var scratch: u8[4096]
@@ -70,7 +155,10 @@ pub func open(path: str, controls: storage_io.Controls = storage_io.Controls()) 
     if created:
         try storage_io.write_all(&file, controls, header.bytes)
     discard(try file.seek(0))
-    return Journal(file = file, lock_file = lock_file, directory = directory, controls = controls)
+    return Journal(file = file, lock_file = lock_file, directory = directory, controls = controls, filename = file_name, name_owner = name_owner)
+
+func release_name(name: str, owner: memory.Allocator):
+    with owner: strings.release(name)
 
 pub func encode_frame(payload: const u8[], generation: u64, operations: usize) -> Buffer!:
     var out: Buffer
@@ -128,8 +216,15 @@ pub func replay(log: Journal*, root: tree.Node*?*, generation: u64*) -> !:
         error(corrupt, "invalid database journal size")
     var magic: u8[16]
     try storage_io.read_exact(&log.file, log.controls, magic)
-    if compare(magic, header.bytes) != 0: error(corrupt, "unknown database format")
     log.position = 16
+    if compare(magic, checkpoint.header.bytes) == 0:
+        let base = try checkpoint.read(&log.file, log.controls, size)
+        tree.drop(*root)
+        *root = base.root
+        *generation = base.generation
+        log.position = base.end
+    elif compare(magic, header.bytes) != 0:
+        error(corrupt, "unknown database format")
     while log.position < size:
         let remaining = size - log.position
         if remaining < 24: break

@@ -9,6 +9,8 @@ import time
 
 from check_http import check as check_http
 from check_journal import check as check_journal
+from check_checkpoint import check as check_checkpoint
+from check_checkpoint_process import check as check_checkpoint_process
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,17 +42,24 @@ def main():
         programs = [(ROOT / "src/luce_db/tree_tests.lucb", "tree")]
         programs += [(ROOT / "src/luce_db/writer_tests.lucb", "writers")]
         programs += [(ROOT / "src/luce_db/storage_fault_tests.lucb", "storage_faults")]
+        programs += [(ROOT / f"src/luce_db/{source}.lucb", name) for source, name in [
+            ("checkpoint_tests", "checkpoints"), ("checkpoint_fault_tests", "checkpoint_faults"),
+            ("checkpoint_concurrency", "checkpoint_concurrency"), ("checkpoint_allocations", "checkpoint_allocations"),
+            ("checkpoint_process", "checkpoint_process")]]
         programs += [(ROOT / f"tests/{name}.lucb", name) for name in ["transactions", "bounds", "concurrency", "journal_driver", "registry_server"]]
+        programs += [(ROOT / "tests/checkpoint_driver.lucb", "checkpoint_driver")]
         for source, name in programs:
             run([args.base.resolve(), "build", source, *flags, "-o", output / name])
         run([args.luce.resolve(), "build", ROOT / "tests/facade.luc", *flags, "-o", output / "facade"])
         with tempfile.TemporaryDirectory(prefix="luce-db-tests-") as tmp:
             run([output / "tree"])
             run([output / "writers"])
-            for name in ["transactions", "bounds", "concurrency", "facade", "storage_faults"]:
+            for name in ["transactions", "bounds", "concurrency", "facade", "storage_faults", "checkpoints", "checkpoint_faults", "checkpoint_concurrency", "checkpoint_allocations"]:
                 run([output / name, Path(tmp) / f"{name}.db"])
             run([output / "concurrency", Path(tmp) / "concurrency-wait.db", "wait"])
         check_journal(output / "journal_driver")
+        check_checkpoint(output / "checkpoint_driver")
+        check_checkpoint_process(output / "checkpoint_driver", output / "checkpoint_process")
         check_http(output / "registry_server")
         print(f"PASS {mode} ({time.monotonic() - start:.1f}s)", flush=True)
     print(f"PASS all {len(selected)} selected compiler modes", flush=True)

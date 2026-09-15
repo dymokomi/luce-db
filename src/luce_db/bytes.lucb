@@ -80,6 +80,19 @@ pub func checksum(bytes: const u8[]) -> u32:
             crc = (crc >> 1) ^ (3988292384 if (crc & 1) != 0 else 0)
     return crc ^ 4294967295
 
+## Incremental equivalent used for bounded-memory checkpoint framing.
+pub struct Crc32:
+    var state: u32 = 4294967295
+
+    pub mutating func update(data: const u8[]):
+        for byte in data:
+            self.state ^= (u32)byte
+            for bit in 0..<8:
+                self.state = (self.state >> 1) ^ (3988292384 if (self.state & 1) != 0 else 0)
+
+    pub func finish() -> u32:
+        return self.state ^ 4294967295
+
 pub struct Reader:
     pub var bytes: const u8[]
     pub var offset: usize

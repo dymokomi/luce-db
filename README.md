@@ -56,6 +56,9 @@ name, not hyphenated import syntax. See [tests/facade.luc](tests/facade.luc).
   `text()` rejects non-UTF-8; binary `bytes()` is lossless.
 - `Database.statistics()`: committed state and observational admission counters;
   see [writer admission and statistics](docs/WRITERS.md).
+- `Database.checkpoint(wait_ms=0)`: explicitly rewrite current records into a
+  bounded-memory base snapshot, preserving generation and existing readers. This
+  upgrades format 001 to 002; see [checkpoint semantics and failure recovery](docs/CHECKPOINTS.md).
 
 Native Base callers explicitly release returned `interop.Reference` carriers.
 Luce owns them through its normal managed-object lifetime. Explicit `close()` is
@@ -129,8 +132,9 @@ before closing it. Transactions and facade objects themselves are worker-local.
 
 These are format/admission limits, **not an aggregate memory guarantee**. Old
 snapshots and uncommitted transactions retain memory; callers must also bound
-concurrency and lifetimes. Exceeding a limit fails explicitly. No compaction,
-automatic migration, page cache, SQL, secondary-index planner, connectors,
+concurrency and lifetimes. Exceeding a limit fails explicitly. Explicit checkpoint/
+compaction is available; automatic/application migration, backup/restore, page cache,
+SQL, secondary-index planner, connectors,
 replication, encryption at rest, credentials, sessions, or permission system yet.
 The journal is replayed fully on open; it is not a disk-page B+tree. There are no
 throughput or power-failure certification claims.
@@ -182,8 +186,9 @@ the workspace language-audit document records the issue without changing Base.
    replacement boundaries as those are implemented; measure memory/latency,
    notification-based waiting and optional group commit. The first
    bounded FIFO admission implementation is complete; it currently uses sleep polling.
-2. Design/version checkpoints, compaction, backup/restore, crash-safe replacement,
-   migrations, disk-page indexing and an explicit aggregate memory budget.
+2. Extend explicit checkpoint/compaction with verified backup/restore, application
+   migrations, measured recovery/resource limits and an explicit aggregate memory
+   budget. Disk-page indexing remains a later storage-layout decision.
 3. Define native provider interfaces and typed users/invitations/packages repositories;
    add a worker-safe facade factory usable from high-level Luce server applications.
 4. Build `luce-auth` on audited native cryptography and atomic one-use invitations;

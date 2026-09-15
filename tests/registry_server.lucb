@@ -74,6 +74,14 @@ struct Handlers:
             return failed(failure.code, failure.message)
         return interop.Outcome[interop.Reference[http.Response]].success(interop.Owned[interop.Reference[http.Response]](response, &response.owner.header))
 
+    func compact(request: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        discard(request)
+        let database = shared_database else trap("missing database")
+        let generation = database.checkpoint(wait_ms = 1000) catch failure: return failed(failure.code, failure.message)
+        var scratch: u8[32]
+        let text = format(scratch, f"{generation}") catch failure: return failed(failure.code, failure.message)
+        return reply(text)
+
     mutating func close(): discard(())
 
 func configure(data: str) -> interop.Outcome[http.Application]:
@@ -92,6 +100,9 @@ func configure(data: str) -> interop.Outcome[http.Application]:
     let stop = http.Handler.bind(handlers, Handlers.stop) catch failure: trap(failure.message)
     defer stop.release()
     router.post("/stop", stop) catch failure: trap(failure.message)
+    let compact = http.Handler.bind(handlers, Handlers.compact) catch failure: trap(failure.message)
+    defer compact.release()
+    router.post("/checkpoint", compact) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 

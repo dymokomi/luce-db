@@ -1,5 +1,8 @@
 # Journal I/O failures and recovery barriers
 
+This records the recovery-fault slice before explicit compaction. Current
+checkpoint semantics and its additional fault coverage are in [CHECKPOINTS.md](CHECKPOINTS.md).
+
 September 15, 2026 UTC. Experimental native engine; not a completed checkpoint,
 backup/restore, migration or production-durability milestone. Format 001 and the
 public Luce API are unchanged. Compiler/server source pins remain unchanged.

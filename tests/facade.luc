@@ -15,6 +15,9 @@ pub func main(arguments: list[str]) -> int!:
     assert(snapshot.count() == 2)
     let value = snapshot.get("user/alice") else return 1
     assert(value.text() == "Alice")
+    assert(database.checkpoint(wait_ms = 1000) == 1)
+    assert(snapshot.generation() == 1 and snapshot.count() == 2)
+    assert(value.text() == "Alice")
     database.close()
     assert(snapshot.contains("user/alice"))
     snapshot.close()
