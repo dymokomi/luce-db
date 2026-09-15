@@ -54,6 +54,16 @@ jobs:
       - name: Memory safety instrumentation
         working-directory: luce-db
         run: python3 tests/sanitize.py
+      - name: Package Linux test binaries
+        if: runner.os == 'Linux'
+        working-directory: luce-db
+        run: python3 tools/test_bundle.py --output build/luce-db-smoke-x86_64-linux.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: luce-db-smoke-x86_64-linux
+          path: luce-db/build/luce-db-smoke-x86_64-linux.tar.gz
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
