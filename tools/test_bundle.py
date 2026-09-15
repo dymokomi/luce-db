@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--binaries", type=Path, default=ROOT / "build/native3")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    programs = ["tree", "transactions", "bounds", "concurrency", "facade", "journal_driver", "registry_server"]
+    programs = ["tree", "writers", "transactions", "bounds", "concurrency", "facade", "journal_driver", "registry_server"]
     scripts = ["run_prebuilt.py", "check_http.py", "check_journal.py"]
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest = []

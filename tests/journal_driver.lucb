@@ -48,6 +48,9 @@ pub func main(arguments: str[]) -> i32!:
             refused = true
             recover -1)
         assert(refused)
+        let diagnostic = try database.statistics()
+        assert(diagnostic.needs_reopen)
+        assert(diagnostic.generation == 0 and diagnostic.records == 0 and diagnostic.journal_bytes == 16)
         print("PASS uncertain I/O poisons new reads and commits")
     elif arguments[1] == "hold":
         print("READY")

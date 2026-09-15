@@ -24,10 +24,12 @@ lengths, operation count, generation, exact payload consumption, and both checks
 Repeated keys within a transaction apply in order. There is no hidden struct dump,
 host endianness dependency, pointer serialization, compression, or foreign codec.
 
-Commit sequence: acquire the nonblocking writer slot; validate snapshot generation
-and poison state; build a complete frame; append the entire frame; `fsync`; publish
-an immutable new root under the short head lock; return the generation. Allocation
-failure occurs before append and cannot publish anything.
+Commit sequence: acquire the writer slot (fail-fast by default, optionally through
+the [bounded FIFO admission queue](WRITERS.md)); validate snapshot generation and
+poison state; build a complete frame; append the entire frame; `fsync`; publish an
+immutable new root under the short head lock; return the generation. Allocation
+failure and admission rejection/timeout occur before append and cannot publish
+anything. An admission deadline does not interrupt append or sync.
 
 On file creation, write/sync the header and sync its parent directory. Final
 database/lock symlinks are not followed; the database must be regular with one link.

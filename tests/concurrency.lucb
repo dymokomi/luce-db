@@ -7,8 +7,13 @@ var retries: @u64
 var ready: @u64
 var go: @u64
 
+struct Context:
+    var database: db.Database*
+    var wait_ms: i64
+
 func work(raw: void*?):
-    let database = (db.Database*)(raw else trap("worker context"))
+    let context = (Context*)(raw else trap("worker context"))
+    let database = context.database
     discard(ready.add(1, .release))
     while go.load(.acquire) == 0: thread.sleep(1)
     for index in 0..<40:
@@ -27,8 +32,8 @@ func work(raw: void*?):
             for i in 0..<8: encoded[i] = (u8)(number >> (8 * i))
             tx.value().put("counter", encoded) catch failure: trap(failure.message)
             tx.value().put("mirror", encoded) catch failure: trap(failure.message)
-            let committed = tx.value().commit() catch failure:
-                if failure.code != db.conflict and failure.code != db.busy: trap(failure.message)
+            let committed = tx.value().commit(context.wait_ms) catch failure:
+                if failure.code != db.conflict and failure.code != db.busy and failure.code != db.timed_out: trap(failure.message)
                 discard(retries.add(1, .relaxed))
                 thread.sleep(1)
                 recover -1
@@ -47,13 +52,15 @@ func work(raw: void*?):
         for i in 0..<8: assert(aa[i] == bb[i])
 
 pub func main(arguments: str[]) -> i32!:
-    assert(arguments.length == 2)
+    assert(arguments.length == 2 or arguments.length == 3)
+    let waiting = arguments.length == 3 and arguments[2] == "wait"
     var database = try db.Database(arguments[1])
     defer database.close()
     let empty = try database.snapshot()
     defer empty.release()
     var workers: thread.Handle[8]
-    for index in 0..<8: workers[index] = try thread.spawn(work, &database, name = "db-test")
+    var context = Context(database = &database, wait_ms = 1000 if waiting else 0)
+    for index in 0..<8: workers[index] = try thread.spawn(work, &context, name = "db-test")
     while ready.load(.acquire) != 8: thread.sleep(1)
     go.store(1, .release)
     for worker in workers: try worker.join()
@@ -68,5 +75,10 @@ pub func main(arguments: str[]) -> i32!:
     var number: u64
     for i in 0..<8: number |= (u64)encoded[i] << (8 * i)
     assert(number == 320)
-    print(f"PASS 8 threads, 320 atomic commits, consistent snapshots; retries={retries.load(.acquire)}")
+    let statistics = try database.statistics()
+    assert(statistics.generation == 320 and statistics.records == 2)
+    assert(statistics.waiting_writers == 0 and statistics.peak_waiting_writers <= 8)
+    assert(statistics.busy_returns + statistics.timed_out_attempts + statistics.conflicted_commits == (i64)retries.load(.acquire))
+    if waiting: assert(statistics.busy_returns == 0)
+    print(f"PASS 8 threads, 320 atomic commits, snapshots; wait={waiting}, retries={retries.load(.acquire)}, queued={statistics.queued_attempts}")
     return 0

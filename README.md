@@ -45,13 +45,17 @@ name, not hyphenated import syntax. See [tests/facade.luc](tests/facade.luc).
 - `Database(path)`: open/create, exclusively owned by this process.
 - `begin()`: isolated read-your-writes transaction. `put`/`insert` accept bytes;
   `put_text`/`insert_text` accept strings; `remove` deletes a key.
-- `commit()`: returns a generation after append + OS `fsync`; closes the transaction
-  on success. Closing/releasing without committing rolls it back.
+- `commit(wait_ms=0)`: returns a generation after append + OS `fsync`; closes the
+  transaction on success. Zero fails fast on contention; a positive budget opts
+  into bounded FIFO writer admission. Closing/releasing without committing rolls
+  the transaction back unless an earlier commit returned `uncertain`.
 - `snapshot()`: stable read view; `get`, `contains`, `count`, `generation`, `key_at`.
   `key_at` enumerates byte-lexicographic UTF-8 keys. Missing values return `none`;
   an empty value is present.
 - `Value`: owns immutable bytes independently of its transaction/snapshot.
   `text()` rejects non-UTF-8; binary `bytes()` is lossless.
+- `Database.statistics()`: committed state and observational admission counters;
+  see [writer admission and statistics](docs/WRITERS.md).
 
 Native Base callers explicitly release returned `interop.Reference` carriers.
 Luce owns them through its normal managed-object lifetime. Explicit `close()` is
@@ -66,10 +70,21 @@ root publication; **readers do not hold it during journal sync**. Committing
 writers serialize. An intervening commit invalidates the entire transaction's
 generation, giving coarse-grained optimistic serializability without lost updates.
 
-`busy` means another writer owns the commit slot; use bounded retries with backoff.
+`commit(wait_ms=1000)` waits up to a 1,000 ms admission budget behind earlier
+waiters. The fixed queue holds at most 32 waiting attempts plus one active writer;
+new callers cannot overtake queued attempts. The default remains fail-fast.
+`busy` means fail-fast contention or a full queue; use bounded retries with backoff.
+`timed_out` means queued admission expired **before any commit I/O**. Both leave the
+transaction open. This is not a disk-I/O timeout: after admission, append/sync runs
+to completion or an I/O error. Waiters sleep 1 ms between checks, and scheduling
+can delay timeout observation. No cancellation API or group commit is implemented.
+
 `conflict` at commit means restart the complete transaction on a fresh snapshot.
 `insert` also reports `conflict` when a key already exists: that is a domain conflict,
-not necessarily retryable. There is no internal writer queue or group commit yet.
+not necessarily retryable. FIFO applies to admission attempts, not successful
+transactions: whole-database generation validation still rejects stale snapshots.
+On the small local contention fixture, opting into the queue increased retries;
+this is an ordering/backpressure feature, not a throughput improvement claim.
 
 An append/sync error returns `uncertain` and poisons the engine. Close all database,
 snapshot and transaction handles, reopen, then resolve the operation using its
@@ -103,6 +118,8 @@ before closing it. Transactions and facade objects themselves are worker-local.
 | Value | 0–1 MiB |
 | Current index records | 1,000,000 |
 | Active snapshots + transactions per engine | 1,024 |
+| Waiting commit attempts per engine | 32 |
+| Admission wait budget | 0–60,000 ms |
 
 These are format/admission limits, **not an aggregate memory guarantee**. Old
 snapshots and uncommitted transactions retain memory; callers must also bound
@@ -141,7 +158,9 @@ Tests include AVL invariants, stable snapshots, transaction conflicts, abandoned
 transactions, boundary inputs, retained values, process locks, golden record bytes,
 all final-frame truncation offsets, complete-frame byte corruption, invalid records
 with valid checksums, write failures, process-kill recovery, 8-thread updates,
-high-level Luce ownership, and real concurrent HTTP clients plus server restart.
+FIFO/no-overtaking admission, head/middle/tail timeouts, queue saturation/reuse,
+both fail-fast and queued commits, public statistics, high-level Luce ownership,
+and real concurrent HTTP clients plus server restart.
 CI repeats all six modes on Linux and macOS; see its run results for current status.
 The initial local results and untested boundaries are in [docs/VALIDATION.md](docs/VALIDATION.md).
 `tests/regressions/empty_span.lucb` is a known-failing upstream C-emission reproducer,
@@ -151,7 +170,8 @@ the workspace language-audit document records the issue without changing Base.
 ## Next build order
 
 1. Harden storage: deterministic fault injection at every sync boundary, measured
-   memory/latency, fair bounded commit scheduling and optional group commit.
+   memory/latency, notification-based waiting and optional group commit. The first
+   bounded FIFO admission implementation is complete; it currently uses sleep polling.
 2. Design/version checkpoints, compaction, backup/restore, crash-safe replacement,
    migrations, disk-page indexing and an explicit aggregate memory budget.
 3. Define native provider interfaces and typed users/invitations/packages repositories;
@@ -161,5 +181,6 @@ the workspace language-audit document records the issue without changing Base.
 5. Build `luce-pkg-server` + `luce-cli` on the same repositories and authorization;
    settle external Git versus a native Git subset explicitly. HTTP sits behind the
    existing VPS HTTPS proxy. Remote native clients still need verified HTTPS.
-6. Run isolated staging tests on an agreed VPS/AWS target, with resource limits,
-   temporary data, backup/cleanup and no production DNS/proxy/service changes.
+6. Continue isolated tests on the approved existing VPS, with resource limits,
+   temporary data and cleanup; no production DNS/proxy/service changes. A deployable
+   staging service additionally needs authentication, backup/restore and review.

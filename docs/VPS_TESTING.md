@@ -1,7 +1,7 @@
 # Isolated existing-host tests
 
 The public CI workflow produces `luce-db-smoke-x86_64-linux` only after all Linux
-compiler-mode tests and sanitizer checks pass. It contains seven test executables,
+compiler-mode tests and sanitizer checks pass. It contains eight test executables,
 three Python standard-library-only scripts, both license texts, the Git revision
 and per-file hashes.
 These are test artifacts, not an installation package or an authenticated service.

@@ -14,7 +14,7 @@ def main():
     parser.add_argument("binaries", type=Path)
     args = parser.parse_args()
     binaries = args.binaries.resolve()
-    for name in ["tree", "transactions", "bounds", "concurrency", "facade", "journal_driver", "registry_server"]:
+    for name in ["tree", "writers", "transactions", "bounds", "concurrency", "facade", "journal_driver", "registry_server"]:
         if not (binaries / name).is_file(): raise SystemExit(f"missing {name}")
 
     def run(command):
@@ -22,8 +22,10 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="luce-db-prebuilt-") as tmp:
         run([binaries / "tree"])
+        run([binaries / "writers"])
         for name in ["transactions", "bounds", "concurrency", "facade"]:
             run([binaries / name, Path(tmp) / f"{name}.db"])
+        run([binaries / "concurrency", Path(tmp) / "concurrency-wait.db", "wait"])
     check_journal(binaries / "journal_driver")
     check_http(binaries / "registry_server")
     print("PASS prebuilt database suite", flush=True)

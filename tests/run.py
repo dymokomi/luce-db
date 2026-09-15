@@ -38,14 +38,17 @@ def main():
         output = ROOT / "build" / mode
         output.mkdir(parents=True, exist_ok=True)
         programs = [(ROOT / "src/luce_db/tree_tests.lucb", "tree")]
+        programs += [(ROOT / "src/luce_db/writer_tests.lucb", "writers")]
         programs += [(ROOT / f"tests/{name}.lucb", name) for name in ["transactions", "bounds", "concurrency", "journal_driver", "registry_server"]]
         for source, name in programs:
             run([args.base.resolve(), "build", source, *flags, "-o", output / name])
         run([args.luce.resolve(), "build", ROOT / "tests/facade.luc", *flags, "-o", output / "facade"])
         with tempfile.TemporaryDirectory(prefix="luce-db-tests-") as tmp:
             run([output / "tree"])
+            run([output / "writers"])
             for name in ["transactions", "bounds", "concurrency", "facade"]:
                 run([output / name, Path(tmp) / f"{name}.db"])
+            run([output / "concurrency", Path(tmp) / "concurrency-wait.db", "wait"])
         check_journal(output / "journal_driver")
         check_http(output / "registry_server")
         print(f"PASS {mode} ({time.monotonic() - start:.1f}s)", flush=True)

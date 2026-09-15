@@ -48,8 +48,8 @@ struct Handlers:
             tx.value().remove("invite/test-only") catch failure: return failed(failure.code, failure.message)
             tx.value().insert_text(key, name) catch failure: return failed(failure.code, failure.message)
             tx.value().put_text("audit/registration", name) catch failure: return failed(failure.code, failure.message)
-            let committed = tx.value().commit() catch failure:
-                if failure.code != db.busy and failure.code != db.conflict: return failed(failure.code, failure.message)
+            let committed = tx.value().commit(wait_ms = 1000) catch failure:
+                if failure.code != db.busy and failure.code != db.conflict and failure.code != db.timed_out: return failed(failure.code, failure.message)
                 thread.sleep(1)
                 recover -1
             if committed > 0: return reply("created", 201)

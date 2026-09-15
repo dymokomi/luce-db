@@ -9,6 +9,7 @@ pub let conflict: ErrorCode = ErrorCode.package(4)
 pub let busy: ErrorCode = ErrorCode.package(5)
 pub let corrupt: ErrorCode = ErrorCode.package(6)
 pub let uncertain: ErrorCode = ErrorCode.package(7)
+pub let timed_out: ErrorCode = ErrorCode.package(8)
 pub let max_key: usize = 1024
 pub let max_value: usize = 1048576
 pub let max_frame: usize = 16777216

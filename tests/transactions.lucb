@@ -11,6 +11,15 @@ pub func main(arguments: str[]) -> i32!:
     defer tx.release()
     try tx.value().put_text("user/alice", "Alice")
     try tx.value().put_text("package/test", "v1")
+    var invalid_waits: usize
+    for wait in [-1, 60001]:
+        discard(tx.value().commit(wait) catch failure:
+            assert(failure.code == db.invalid)
+            invalid_waits += 1
+            recover -1)
+    assert(invalid_waits == 2)
+    assert((try database.statistics()).generation == 0)
+    assert((try database.statistics()).journal_bytes == 16)
     let read = (try tx.value().get("user/alice")) else trap("read your writes")
     defer read.release()
     assert(try read.value().text() == "Alice")
@@ -33,6 +42,11 @@ pub func main(arguments: str[]) -> i32!:
         rejected = true
         recover -1)
     assert(rejected)
+    let statistics = try database.statistics()
+    assert(statistics.generation == 2 and statistics.records == 1)
+    assert(statistics.journal_bytes == 148)
+    assert(statistics.conflicted_commits == 1)
+    assert(statistics.queued_attempts == 0 and statistics.waiting_writers == 0)
     assert(try snapshot.value().count() == 2)
     print("PASS transactions, snapshots, ordering, read-your-writes, conflicts")
     return 0

@@ -19,15 +19,17 @@ def main():
         subprocess.run([str(arg) for arg in command], cwd=ROOT, env=environment, check=True, timeout=180)
 
     with tempfile.TemporaryDirectory(prefix="luce-db-sanitizers-") as tmp:
-        for name in ["transactions", "bounds", "concurrency"]:
+        for name in ["transactions", "bounds", "concurrency", "writers"]:
             generated = output / f"{name}.c"
             executable = output / name
-            run([base, "build", ROOT / f"tests/{name}.lucb", "--emit=c", "-o", generated])
+            source = ROOT / "src/luce_db/writer_tests.lucb" if name == "writers" else ROOT / f"tests/{name}.lucb"
+            run([base, "build", source, "--emit=c", "-o", generated])
             run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g", "-w", "-fno-strict-aliasing",
                  "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I", runtime,
                  generated, runtime / "lucb_rt.c", "-pthread", "-lm", "-o", executable])
             run([executable, Path(tmp) / f"{name}.db"])
-    print("PASS address/undefined-behavior sanitizers: transactions, bounds, 8-thread updates", flush=True)
+            if name == "concurrency": run([executable, Path(tmp) / "concurrency-wait.db", "wait"])
+    print("PASS address/undefined-behavior sanitizers: transactions, bounds, FIFO queue, both concurrency modes", flush=True)
 
 
 if __name__ == "__main__": main()

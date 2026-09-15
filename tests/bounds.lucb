@@ -96,5 +96,14 @@ pub func main(arguments: str[]) -> i32!:
     last.close()
     try duplicate(arguments[1])
     assert((try binary.value().bytes()).length == 2)
+    ## The transaction can be the final native owner: queue release must precede free.
+    var final_database = try db.Database(arguments[1])
+    defer final_database.close()
+    let final_tx = try final_database.begin()
+    defer final_tx.release()
+    try final_tx.value().put_text("after-close", "last owner")
+    final_database.close()
+    assert(try final_tx.value().commit(wait_ms = 1000) == 2)
+    try duplicate(arguments[1])
     print("PASS limits, invalid input, binary/empty values, rollback, ownership, lock lifetime")
     return 0

@@ -13,6 +13,8 @@ pub let conflict = bytes.conflict
 pub let busy = bytes.busy
 pub let corrupt = bytes.corrupt
 pub let uncertain = bytes.uncertain
+pub let timed_out = bytes.timed_out
+pub type Statistics = engine.Statistics
 
 ## Owned immutable value. Binary/text views live until Value.close/release.
 pub struct Value:
@@ -92,9 +94,10 @@ pub struct Transaction:
     pub mutating func remove(key: str) -> !:
         try self.transaction.remove(key)
 
-    ## Successful commit closes the transaction. busy/conflict require caller retry.
-    pub mutating func commit() -> i64!:
-        return (i64)try self.transaction.commit()
+    ## wait_ms bounds FIFO admission, not disk I/O after admission. Zero fails fast.
+    ## Successful commit closes the transaction. Conflicts require a fresh snapshot.
+    pub mutating func commit(wait_ms: i64 = 0) -> i64!:
+        return (i64)try self.transaction.commit(wait_ms)
 
     pub mutating func close():
         self.transaction.close()
@@ -124,6 +127,11 @@ pub struct Database:
             transaction.close()
             error(failure.code, failure.message)
         return try interop.Reference[Transaction].adopt(native, transaction_type, memory.heap)
+
+    ## Observational counters; the generation/record/byte triple is one committed view.
+    pub func statistics() -> Statistics!:
+        let store = self.store else error(closed, "database is closed")
+        return engine.statistics(store)
 
     pub mutating func close():
         if let store = self.store: engine.drop(store)

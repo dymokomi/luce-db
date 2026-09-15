@@ -3,15 +3,18 @@ import memory
 import sync
 import luce_db.tree as tree
 import luce_db.journal as journal
-from luce_db.bytes import Buffer, valid_key, max_value, max_frame, invalid, limit, closed, conflict, busy, uncertain
+import luce_db.writers as writers
+from luce_db.bytes import Buffer, valid_key, max_value, max_frame, invalid, limit, closed, conflict, uncertain
 
 pub struct Store:
     var references: @u64
     var views: @u64
     var head_lock: sync.Mutex
-    var writer: sync.Mutex
+    var writer: writers.Queue
     var root: tree.Node*?
     var generation: u64
+    var published_bytes: i64
+    var conflicted_commits: @u64
     var poisoned: bool
     var log: journal.Journal
 
@@ -22,7 +25,7 @@ pub func open(path: str) -> Store*!:
     errdefer tree.drop(root)
     var generation: u64
     try journal.replay(&log, &root, &generation)
-    let store = try new Store(root = root, generation = generation, log = log) in memory.heap
+    let store = try new Store(root = root, generation = generation, published_bytes = log.position, log = log) in memory.heap
     store.references.store(1, .relaxed)
     return store
 
@@ -34,6 +37,31 @@ pub func drop(store: Store*):
         tree.drop(store.root)
         store.log.close()
         free(store) in memory.heap
+
+pub struct Statistics:
+    pub let generation: i64
+    pub let records: i64
+    pub let journal_bytes: i64
+    pub let needs_reopen: bool
+    pub let active_views: i64
+    pub let waiting_writers: i64
+    pub let peak_waiting_writers: i64
+    pub let queued_attempts: i64
+    pub let busy_returns: i64
+    pub let timed_out_attempts: i64
+    pub let conflicted_commits: i64
+
+pub func statistics(store: Store*) -> Statistics:
+    store.head_lock.lock()
+    let generation = (i64)store.generation
+    let records = (i64)tree.count(store.root)
+    let position = store.published_bytes
+    let poisoned = store.poisoned
+    store.head_lock.unlock()
+    let admission = store.writer.statistics()
+    return Statistics(generation, records, position, poisoned, (i64)store.views.load(.acquire),
+        admission.waiting, admission.peak, admission.enqueued, admission.busy_returns,
+        admission.timeouts, (i64)store.conflicted_commits.load(.acquire))
 
 pub struct View:
     pub var store: Store*?
@@ -107,19 +135,21 @@ pub struct Transaction:
         self.view.root = root
         self.operations += 1
 
-    pub mutating func commit() -> u64!:
+    pub mutating func commit(wait_ms: i64 = 0) -> u64!:
         let store = self.view.store else error(closed, "transaction is closed")
-        if not store.writer.try_lock(): error(busy, "another writer is committing; retry with backoff")
-        ## Retain through the deferred unlock, even after closing the view.
+        ## Retain through queue release, even after closing the last view.
         hold(store)
         defer drop(store)
-        defer store.writer.unlock()
+        try store.writer.enter(wait_ms)
+        defer store.writer.leave()
         store.head_lock.lock()
         let poisoned = store.poisoned
         let current = store.generation
         store.head_lock.unlock()
         if poisoned: error(uncertain, "database needs reopen after uncertain I/O")
-        if current != self.view.generation: error(conflict, "snapshot changed; restart the transaction")
+        if current != self.view.generation:
+            discard(store.conflicted_commits.add(1, .relaxed))
+            error(conflict, "snapshot changed; restart the transaction")
         if self.operations == 0:
             self.close()
             return current
@@ -137,6 +167,7 @@ pub struct Transaction:
         let old = store.root
         store.root = tree.hold(self.view.root)
         store.generation = current + 1
+        store.published_bytes = store.log.position
         store.head_lock.unlock()
         tree.drop(old)
         self.close()

@@ -73,3 +73,24 @@ resource was provisioned.
 Linux execution is therefore now validated for this slice. The remaining exclusions
 above (power-loss validation, checkpoint/restore/migration, production auth, memory
 pressure and performance targets) still apply.
+
+## Bounded writer admission milestone — 2026-09-14
+
+The next slice adds optional FIFO admission (32 waiting slots, 0–60,000 ms budget)
+and public committed-state/admission statistics. Local arm64 macOS verification
+passed all six compiler modes and AddressSanitizer + UndefinedBehaviorSanitizer.
+The compiler/server pins are unchanged; no language repository was modified.
+
+New cases exercise FIFO order and no overtaking, timeouts at the head/middle/tail,
+queue saturation and slot reuse, invalid budgets without journal changes,
+post-close transaction lifetime through queue release, diagnostics after uncertain
+I/O, and statistics through the Luce facade. Every full mode additionally runs the
+eight-thread/320-commit fixture twice (fail-fast and queued), the existing 267
+journal cases, and the 32-client HTTP invitation/restart fixture with queued commits.
+
+All six local full-mode runs took approximately 9–11 seconds each, including
+compilation. Queued mode caused more retries in this small workload because whole-
+generation conflicts remain; no performance improvement is claimed. The queue
+currently uses 1 ms sleep polling and bounds admission, not disk-I/O duration.
+Cancellation, notification-based waiting, group commit, ThreadSanitizer coverage,
+power-loss testing and production readiness remain outside this milestone.

@@ -1,0 +1,139 @@
+import luce_db.writers as writers
+import luce_db.bytes as bytes
+import thread
+import time
+
+struct Order:
+    var next: @u64
+    var items: i64[32]
+
+struct Worker:
+    var queue: writers.Queue*?
+    var order: Order*?
+    var id: i64
+    var wait_ms: i64
+    var result: @u64
+
+func run_worker(raw: void*?):
+    let worker = (Worker*)(raw else trap("missing worker"))
+    let queue = worker.queue else trap("missing queue")
+    let order = worker.order else trap("missing order")
+    queue.enter(worker.wait_ms) catch failure:
+        assert(failure.code == bytes.timed_out)
+        worker.result.store(2, .release)
+        return
+    let index = order.next.add(1, .acq_rel)
+    order.items[(usize)index] = worker.id
+    thread.sleep(2)
+    queue.leave()
+    worker.result.store(1, .release)
+
+func wait_enqueued(queue: writers.Queue*, count: i64):
+    let started = time.now()
+    while queue.statistics().enqueued < count:
+        assert(time.since(started) < 10000000000)
+        thread.sleep(1)
+
+func check_fifo() -> !:
+    var queue: writers.Queue
+    var order: Order
+    var contexts: Worker[8]
+    var handles: thread.Handle[8]
+    try queue.enter()
+    for index in 0..<8:
+        contexts[index] = Worker(queue = &queue, order = &order, id = index, wait_ms = 10000)
+        handles[index] = try thread.spawn(run_worker, &contexts[index])
+        wait_enqueued(&queue, (i64)index + 1)
+    assert(queue.statistics().waiting == 8)
+    assert(queue.statistics().peak == 8)
+    queue.leave()
+    ## Fail-fast callers cannot overtake admitted waiters in an idle handoff gap.
+    while order.next.load(.acquire) < 8:
+        var acquired = true
+        queue.enter() catch failure:
+            assert(failure.code == bytes.busy)
+            acquired = false
+        if acquired:
+            assert(order.next.load(.acquire) == 8)
+            queue.leave()
+        thread.sleep(1)
+    for handle in handles: try handle.join()
+    for index in 0..<8:
+        assert(contexts[index].result.load(.acquire) == 1)
+        assert(order.items[index] == index)
+    assert(queue.statistics().waiting == 0)
+    assert(queue.statistics().enqueued == 8)
+    try queue.enter()
+    queue.leave()
+
+func check_timeout(expiring: i64) -> !:
+    var queue: writers.Queue
+    var order: Order
+    var contexts: Worker[3]
+    var handles: thread.Handle[3]
+    try queue.enter()
+    for index in 0..<3:
+        contexts[index] = Worker(queue = &queue, order = &order, id = index,
+            wait_ms = 30 if index == expiring else 10000)
+        handles[index] = try thread.spawn(run_worker, &contexts[index])
+        wait_enqueued(&queue, (i64)index + 1)
+    let started = time.now()
+    while contexts[expiring].result.load(.acquire) == 0:
+        assert(time.since(started) < 10000000000)
+        thread.sleep(1)
+    assert(contexts[expiring].result.load(.acquire) == 2)
+    assert(queue.statistics().waiting == 2)
+    assert(queue.statistics().timeouts == 1)
+    queue.leave()
+    for handle in handles: try handle.join()
+    var next: usize
+    for index in 0..<3:
+        if index == expiring: continue
+        assert(contexts[index].result.load(.acquire) == 1)
+        assert(order.items[next] == index)
+        next += 1
+    assert(queue.statistics().waiting == 0)
+    try queue.enter()
+    queue.leave()
+
+func check_capacity() -> !:
+    var queue: writers.Queue
+    var order: Order
+    var contexts: Worker[32]
+    var handles: thread.Handle[32]
+    try queue.enter()
+    for index in 0..<32:
+        contexts[index] = Worker(queue = &queue, order = &order, id = index, wait_ms = 10000)
+        handles[index] = try thread.spawn(run_worker, &contexts[index])
+        wait_enqueued(&queue, (i64)index + 1)
+    var refused = false
+    queue.enter(1000) catch failure:
+        assert(failure.code == bytes.busy)
+        refused = true
+    assert(refused)
+    assert(queue.statistics().waiting == 32 and queue.statistics().peak == 32)
+    assert(queue.statistics().enqueued == 32 and queue.statistics().busy_returns == 1)
+    queue.leave()
+    for handle in handles: try handle.join()
+    for index in 0..<32:
+        assert(contexts[index].result.load(.acquire) == 1)
+        assert(order.items[index] == index)
+    assert(queue.statistics().waiting == 0)
+    try queue.enter()
+    queue.leave()
+
+pub func main(arguments: str[]) -> i32!:
+    discard(arguments)
+    var queue: writers.Queue
+    var invalid: usize
+    for budget in [-1, 60001]:
+        queue.enter(budget) catch failure:
+            assert(failure.code == bytes.invalid)
+            invalid += 1
+    assert(invalid == 2)
+    assert(queue.statistics().enqueued == 0)
+    try check_fifo()
+    for expiring in 0..<3: try check_timeout(expiring)
+    try check_capacity()
+    print("PASS FIFO writer admission, no barging, head/middle/tail expiry, 32-slot capacity/reuse")
+    return 0
