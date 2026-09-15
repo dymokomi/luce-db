@@ -1,6 +1,7 @@
 # luce-db
 
 Native **Luce Base** embedded transactional storage, with an owning **Luce** API.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 The first milestone is registry metadata: users, invitations, package records,
 and atomic audit entries. No SQLite, foreign database engine, SQL parser, or
 database subprocess is used. OS file, allocation, thread, and synchronization
