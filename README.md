@@ -142,6 +142,7 @@ all final-frame truncation offsets, complete-frame byte corruption, invalid reco
 with valid checksums, write failures, process-kill recovery, 8-thread updates,
 high-level Luce ownership, and real concurrent HTTP clients plus server restart.
 CI repeats all six modes on Linux and macOS; see its run results for current status.
+The initial local results and untested boundaries are in [docs/VALIDATION.md](docs/VALIDATION.md).
 `tests/regressions/empty_span.lucb` is a known-failing upstream C-emission reproducer,
 not a passing package test. The buffer implementation avoids that compiler path;
 the workspace language-audit document records the issue without changing Base.
