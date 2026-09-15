@@ -182,10 +182,10 @@ the workspace language-audit document records the issue without changing Base.
 
 ## Next build order
 
-1. Harden storage: extend the existing journal I/O fault controls to checkpoint/
-   replacement boundaries as those are implemented; measure memory/latency,
-   notification-based waiting and optional group commit. The first
-   bounded FIFO admission implementation is complete; it currently uses sleep polling.
+1. Continue storage hardening from the [validated checkpoint/fault boundary](docs/CHECKPOINTS.md):
+   measure memory/latency, notification-based waiting and optional group commit.
+   The first bounded FIFO admission implementation is complete; it currently
+   uses sleep polling.
 2. Extend explicit checkpoint/compaction with verified backup/restore, application
    migrations, measured recovery/resource limits and an explicit aggregate memory
    budget. Disk-page indexing remains a later storage-layout decision.

@@ -1,5 +1,11 @@
 # Initial validation — 2026-09-14
 
+This is a historical validation record. Later recovery-I/O evidence is in
+[STORAGE_FAULTS.md](STORAGE_FAULTS.md); explicit checkpoint/compaction now has its
+own [local, hosted and isolated-host validation](CHECKPOINTS.md#verification-scope).
+Those later results do not remove the remaining restore, migration, aggregate
+resource, production-authentication or independent-review gates.
+
 Initial implementation commit: `e6afc83`. Initial host: arm64 macOS. The exact Base,
 Luce and server sources are pinned in `bootstrap/`. The first section records local
 results; subsequent Linux/macOS CI and isolated VPS results are recorded below.

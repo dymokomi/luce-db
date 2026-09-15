@@ -136,10 +136,36 @@ is deterministic for the same committed key/value state and generation.
 Final-source local macOS arm64 verification passed all six compiler modes, the
 expanded ASan/UBSan suite and the full eighteen-1-MiB-value profile. Logs are retained
 under ignored `build/checkpoint-correctness.log`, `checkpoint-sanitize.log` and
-`checkpoint-extended.log`. No hosted or isolated-host pass is claimed for this
-checkpoint yet. All previous DB gates remain enabled; compiler and standard-library
-sources are unchanged. Hosted jobs repeat the larger profile; prebuilt quick tests
-use the bounded smaller case.
+`checkpoint-extended.log`. All previous DB gates remain enabled; compiler and
+standard-library sources are unchanged.
+
+Published/tested source: `13f23bae7289c13ab9726e45d9f08212e588b998`.
+[CI run 34942903244](https://github.com/dymokomi/luce-db/actions/runs/34942903244)
+passed all six modes, expanded sanitizers and the larger-than-frame profile on
+Ubuntu 24.04 x86_64 (4m54s) and macOS 15 arm64 (5m40s). Downloaded per-platform
+logs and the sanitizer/extended step output confirm the scope above; this is not
+inferred from an earlier revision's results.
+
+The Linux native-opt-3 archive had SHA-256
+`cb80bfe50f57a6fd563702a60b0f8a24efbe37bf34bf1c6742a90dad34437840`.
+Before execution, local and remote checks verified its exact revision, 25 unique
+allowlisted regular members, 24 content hashes, permissions/size bounds and all
+15 ELF64 x86_64 executable headers. The complete prebuilt suite passed on an
+isolated second host under the unchanged [test protections](VPS_TESTING.md):
+private network/temporary storage, read-only host/input, dynamic user, 25% CPU,
+512 MiB memory maximum and 180-second deadline. Reported runtime was 19.983 seconds
+and CPU time 2.879 seconds. These are suite observations, not database throughput,
+memory-capacity, security-review or hardware-durability guarantees.
+
+That run included the 485 quick format cases, 112 deterministic publication-fault
+cases, 26 allocation-failure paths, four gated concurrency cases, fourteen process/
+identity cases, actual Luce ownership, the concurrent HTTP checkpoint/restart
+fixture and all previous prebuilt suites. The eighteen-1-MiB-value profile ran
+locally and in CI, not on the second host. A separately verified local macOS
+bundle also passed the relocated prebuilt suite. Both exact extraction stages
+were removed after verification; archives/logs were retained. The transient test
+unit was absent/inactive, and before/after live-service and HTTPS checks matched.
+No live configuration, application data or credentials changed.
 
 Remaining work: backup/export/restore and consistency verification, application
 migrations, aggregate admission, measured large-store latency/memory/recovery,
