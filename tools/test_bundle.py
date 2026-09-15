@@ -27,6 +27,8 @@ def main():
             manifest.append(f"{hashlib.sha256(data).hexdigest()}  {name}\n")
         for name in programs: add(f"bin/{name}", (args.binaries / name).read_bytes(), 0o755)
         for name in scripts: add(f"tests/{name}", (ROOT / "tests" / name).read_bytes())
+        for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE"]:
+            add(name, (ROOT / name).read_bytes())
         add("REVISION", (revision + "\n").encode())
         add("SHA256SUMS", "".join(manifest).encode())
     print(f"{hashlib.sha256(args.output.read_bytes()).hexdigest()}  {args.output.name}", flush=True)
