@@ -1,9 +1,9 @@
 # Initial validation — 2026-09-14
 
-Implementation commit: `e6afc83`. Host: arm64 macOS. The exact Base, Luce and
-server sources are pinned in `bootstrap/`. These results are local; Linux/macOS
-GitHub CI is configured but has **not run**, because public publication awaits
-explicit approval. No AWS instance, VPS service, proxy or DNS was changed.
+Initial implementation commit: `e6afc83`. Initial host: arm64 macOS. The exact Base,
+Luce and server sources are pinned in `bootstrap/`. The first section records local
+results; subsequent Linux/macOS CI and isolated VPS results are recorded below.
+The repository is now public under MIT OR Apache-2.0 with explicit user approval.
 
 `python3 tests/run.py --mode all` passed all six modes: native optimization levels
 0, 1, 2 and 3, plus C debug and C release. Every mode independently rebuilt and ran:
@@ -35,9 +35,41 @@ outside the passing gate for the language audit. Native compiler sources were no
 modified. Readiness/ACK lines also explicitly flush stdout to avoid backend-dependent
 pipe buffering during process tests.
 
-Not validated here: Linux execution, power interruption, fsync fault injection,
+Not validated by the initial local run: Linux execution, power interruption, fsync fault injection,
 ENOSPC on a full filesystem, malicious storage directories, network filesystems,
 checkpoint/restore/migration, aggregate memory pressure, fair writer scheduling,
 production authentication or any performance target. Process-kill recovery does
 not establish power-loss durability. The server is an unauthenticated loopback
 test fixture, not a deployable registry.
+
+## Public CI and existing VPS verification
+
+Code/test-bundle revision: `2435ac0e3906b9b615f4aa07eea0a15f2dd44ade`.
+[CI run 34916665087](https://github.com/dymokomi/luce-db/actions/runs/34916665087)
+passed on **Ubuntu 24.04 x86-64 and macOS 15 arm64**. Both hosts ran all six compiler
+modes and the address/undefined-behavior instrumentation gate. The Linux job then
+produced a checksummed, prebuilt test bundle; no compiler was installed on the VPS.
+
+The same native-opt-3 Linux bundle passed on the user's existing Ubuntu 24.04
+Lightsail VPS. Archive and per-file hashes and the embedded source revision were
+verified before execution. The test ran as a transient dynamic user, with private
+networking, private temporary storage, read-only host filesystem, inaccessible live
+app/home paths, 512 MiB memory maximum, 25% CPU quota, idle I/O priority and a
+180-second deadline. See [VPS_TESTING.md](VPS_TESTING.md).
+
+All prebuilt cases passed, including 4,000 model-based index operations, 320 commits
+across eight threads, 267 journal cases, the Luce facade, and 32 competing HTTP
+invitation claims with one winner plus restart verification. Reported service
+runtime was 5.470 seconds; this is a small correctness smoke test under an explicit
+CPU cap, **not a database throughput benchmark or production capacity claim**.
+
+Afterward the uploaded temporary directory was removed and both transient units
+were absent/inactive. The same 32 host services remained running. Caddy's PID,
+activation timestamp and configuration checksum were unchanged, and `luciaos.com`
+still returned HTTPS 200 with the same ETag. No DNS, reverse-proxy configuration,
+firewall, production service or real application data was modified. No paid cloud
+resource was provisioned.
+
+Linux execution is therefore now validated for this slice. The remaining exclusions
+above (power-loss validation, checkpoint/restore/migration, production auth, memory
+pressure and performance targets) still apply.
