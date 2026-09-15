@@ -31,7 +31,14 @@ immutable new root under the short head lock; return the generation. Allocation
 failure and admission rejection/timeout occur before append and cannot publish
 anything. An admission deadline does not interrupt append or sync.
 
-On file creation, write/sync the header and sync its parent directory. Final
+On file creation, write the header. After a complete successful replay, including
+any required tail truncation, sync the journal and its retained parent directory
+before exposing an engine. This applies to every open, not just new files or torn
+tails: existing complete bytes may come from an earlier failed/unacknowledged sync,
+and an existing filename may come from an unsuccessful creation directory sync.
+Failure at either recovery barrier closes the unpublished engine; retrying open
+revalidates and repeats both barriers. No directory sync is needed for an ordinary
+append to an already established filename. Final
 database/lock symlinks are not followed; the database must be regular with one link.
 Parents must be operator-controlled. The sidecar stays present after clean close.
 File/lock creation requests mode 0600; existing file permissions are not rewritten.
@@ -42,6 +49,12 @@ to the last committed boundary and sync before accepting new operations. A corru
 complete frame, corrupt full prefix, unsupported header, or invalid semantic record
 fails closed **without modifying the journal**. A partial initial file header is
 an error, not an automatically reset empty database. Keep the original and investigate.
+
+Open retains the directory descriptor through engine lifetime along with the file
+and process lock. Read/write/file-sync/directory-sync/truncate operations have an
+internal per-store native callback boundary for deterministic tests; the Luce API
+uses only the standard OS implementation. See [STORAGE_FAULTS.md](STORAGE_FAULTS.md)
+for callback lifetime rules, exact covered failures and exclusions.
 
 Failure during append or sync is an **uncertain commit outcome**, even if this
 process has not published a root. New snapshots/commits fail until every engine

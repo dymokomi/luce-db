@@ -92,6 +92,12 @@ application-level idempotency record. A complete unacknowledged commit can recov
 do not report rollback or retry blindly. Existing snapshots remain their original
 committed views. See [the storage contract](docs/STORAGE.md).
 
+Successful open/reopen validates replay, synchronizes the journal and its parent
+directory, then exposes recovered state. Even a complete existing file may come
+from an earlier unacknowledged write or failed creation sync. A failed recovery
+barrier returns no engine; do not treat a failed open as rollback. See
+[deterministic storage-failure tests](docs/STORAGE_FAULTS.md).
+
 One persistent sidecar `database-path.lock` uses an OS advisory exclusive lock.
 It is not a disposable PID file: **never delete it while an owner can exist**.
 Snapshots/transactions retain the engine and its lock even after `Database.close`.
@@ -160,7 +166,10 @@ all final-frame truncation offsets, complete-frame byte corruption, invalid reco
 with valid checksums, write failures, process-kill recovery, 8-thread updates,
 FIFO/no-overtaking admission, head/middle/tail timeouts, queue saturation/reuse,
 both fail-fast and queued commits, public statistics, high-level Luce ownership,
-and real concurrent HTTP clients plus server restart.
+and real concurrent HTTP clients plus server restart. The 200 deterministic
+storage-I/O cases additionally cover byte-cut failures, short/invalid transfers,
+file/directory sync and truncation failures, reopen barriers, retained snapshots,
+queued writer poisoning and per-store control isolation.
 CI repeats all six modes on Linux and macOS; see its run results for current status.
 The initial local results and untested boundaries are in [docs/VALIDATION.md](docs/VALIDATION.md).
 `tests/regressions/empty_span.lucb` is a known-failing upstream C-emission reproducer,
@@ -169,8 +178,9 @@ the workspace language-audit document records the issue without changing Base.
 
 ## Next build order
 
-1. Harden storage: deterministic fault injection at every sync boundary, measured
-   memory/latency, notification-based waiting and optional group commit. The first
+1. Harden storage: extend the existing journal I/O fault controls to checkpoint/
+   replacement boundaries as those are implemented; measure memory/latency,
+   notification-based waiting and optional group commit. The first
    bounded FIFO admission implementation is complete; it currently uses sleep polling.
 2. Design/version checkpoints, compaction, backup/restore, crash-safe replacement,
    migrations, disk-page indexing and an explicit aggregate memory budget.

@@ -1,0 +1,63 @@
+## Internal per-store OS I/O boundary for deterministic durability-failure tests.
+## Controls are copied into the journal; context is borrowed until the LAST store
+## reference closes. Callbacks run under open/replay or serialized writer ownership.
+## Never change controls/context concurrently with those operations. Not exported
+## through the owning Luce facade; no global test switch or foreign storage engine.
+import c
+import files
+import io
+from luce_db.bytes import invalid
+
+extern func fsync(descriptor: i32) -> i32
+
+func system_read(context: void*?, file: files.File*, buffer: u8[]) -> usize!:
+    discard(context)
+    return try file.read(buffer)
+
+func system_write(context: void*?, file: files.File*, bytes: const u8[]) -> usize!:
+    discard(context)
+    return try file.write(bytes)
+
+func system_sync(context: void*?, file: files.File*) -> !:
+    discard(context)
+    try file.sync()
+
+func system_truncate(context: void*?, file: files.File*, size: i64) -> !:
+    discard(context)
+    try file.truncate(size)
+
+pub func sync_directory(directory: files.Directory*) -> !:
+    let descriptor = try directory.descriptor()
+    var result = fsync(descriptor)
+    while result != 0 and c.errno() == c.interrupted: result = fsync(descriptor)
+    if result != 0: error(invalid, "database directory sync failed")
+
+func system_directory_sync(context: void*?, directory: files.Directory*) -> !:
+    discard(context)
+    try sync_directory(directory)
+
+pub struct Controls:
+    pub var context: void*?
+    pub var read: func(void*?, files.File*, u8[]) -> usize! = system_read
+    pub var write: func(void*?, files.File*, const u8[]) -> usize! = system_write
+    pub var sync: func(void*?, files.File*) -> unit! = system_sync
+    pub var truncate: func(void*?, files.File*, i64) -> unit! = system_truncate
+    pub var directory_sync: func(void*?, files.Directory*) -> unit! = system_directory_sync
+
+pub struct Stream: io.Reader, io.Writer:
+    pub var file: files.File*
+    pub var controls: Controls
+
+    pub mutating func read(buffer: u8[]) -> usize!:
+        return try self.controls.read(self.controls.context, self.file, buffer)
+
+    pub mutating func write(bytes: const u8[]) -> usize!:
+        return try self.controls.write(self.controls.context, self.file, bytes)
+
+pub func read_exact(file: files.File*, controls: Controls, buffer: u8[]) -> !:
+    var stream = Stream(file = file, controls = controls)
+    try io.read_exact(&stream, buffer)
+
+pub func write_all(file: files.File*, controls: Controls, bytes: const u8[]) -> !:
+    var stream = Stream(file = file, controls = controls)
+    try io.write_all(&stream, bytes)

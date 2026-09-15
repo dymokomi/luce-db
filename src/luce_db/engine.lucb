@@ -4,6 +4,7 @@ import sync
 import luce_db.tree as tree
 import luce_db.journal as journal
 import luce_db.writers as writers
+import luce_db.storage_io as storage_io
 from luce_db.bytes import Buffer, valid_key, max_value, max_frame, invalid, limit, closed, conflict, uncertain
 
 pub struct Store:
@@ -18,8 +19,8 @@ pub struct Store:
     var poisoned: bool
     var log: journal.Journal
 
-pub func open(path: str) -> Store*!:
-    var log = try journal.open(path)
+pub func open(path: str, controls: storage_io.Controls = storage_io.Controls()) -> Store*!:
+    var log = try journal.open(path, controls)
     errdefer log.close()
     var root: tree.Node*?
     errdefer tree.drop(root)

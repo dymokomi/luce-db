@@ -39,6 +39,7 @@ def main():
         output.mkdir(parents=True, exist_ok=True)
         programs = [(ROOT / "src/luce_db/tree_tests.lucb", "tree")]
         programs += [(ROOT / "src/luce_db/writer_tests.lucb", "writers")]
+        programs += [(ROOT / "src/luce_db/storage_fault_tests.lucb", "storage_faults")]
         programs += [(ROOT / f"tests/{name}.lucb", name) for name in ["transactions", "bounds", "concurrency", "journal_driver", "registry_server"]]
         for source, name in programs:
             run([args.base.resolve(), "build", source, *flags, "-o", output / name])
@@ -46,7 +47,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="luce-db-tests-") as tmp:
             run([output / "tree"])
             run([output / "writers"])
-            for name in ["transactions", "bounds", "concurrency", "facade"]:
+            for name in ["transactions", "bounds", "concurrency", "facade", "storage_faults"]:
                 run([output / name, Path(tmp) / f"{name}.db"])
             run([output / "concurrency", Path(tmp) / "concurrency-wait.db", "wait"])
         check_journal(output / "journal_driver")
