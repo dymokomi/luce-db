@@ -94,3 +94,25 @@ generation conflicts remain; no performance improvement is claimed. The queue
 currently uses 1 ms sleep polling and bounds admission, not disk-I/O duration.
 Cancellation, notification-based waiting, group commit, ThreadSanitizer coverage,
 power-loss testing and production readiness remain outside this milestone.
+
+Published/tested source revision: `d13a1d1ce1116914e2b63bc9dff99dbde816f345`.
+[CI run 34918633116](https://github.com/dymokomi/luce-db/actions/runs/34918633116)
+passed all six compiler modes and both sanitizers on Ubuntu 24.04 x86-64 and macOS
+15 arm64. A separate local repetition ran the native-opt-3 queue tests 20 times,
+all passing; the prebuilt runner also passed locally.
+
+The same CI Linux native-opt-3 bundle then passed on the existing Lightsail VPS
+under the previously documented isolation and resource caps. Archive SHA256:
+`3013ce8d53f1a6b772b70f7de3c65dbda531acbc5ff1f5028ccb4b519a84ed30`.
+The embedded revision and every manifest entry were verified before execution.
+All queue, transaction/lifetime/statistics, journal, Luce facade and HTTP cases
+passed, including 320 commits in each of the two eight-worker admission modes.
+Systemd reported 8.134 seconds elapsed and 1.583 seconds CPU for the entire suite.
+The capped VPS recorded 3,994 retries in fail-fast mode versus 1,120 in queued mode,
+the opposite ordering to local/CI runs: results depend on scheduling/storage/caps,
+and this correctness fixture establishes no general throughput or latency target.
+
+The temporary uploaded bundle was removed; the transient service was absent and
+inactive. All 32 pre-existing services still ran, Caddy's PID/activation time/config
+hash were unchanged, and the site returned HTTPS 200 with the same ETag. No language
+sources, live service configuration, production data or cloud resources changed.
