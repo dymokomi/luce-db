@@ -79,8 +79,17 @@ through 3, C debug and C release. Each passed all 200 scenarios and every prior
 index/transaction/ownership/FIFO/eight-worker/journal/HTTP gate. Generated-C
 ASan/UBSan passed the new 200 scenarios and all existing instrumented suites.
 Logs are retained under ignored `build/storage-fault-correctness.log` and
-`build/storage-fault-sanitize.log`. No hosted or isolated-host pass is claimed
-for this checkpoint yet.
+`build/storage-fault-sanitize.log`.
+
+Source `664af5f703952fc51f1a23de918025385e2e77c9` also passed
+[CI 34940960779](https://github.com/dymokomi/luce-db/actions/runs/34940960779)
+on Linux x86_64 and macOS arm64. Downloaded logs contain all six mode passes and
+the complete 200-case/previous-suite scope; both sanitizer steps passed as well.
+The verified Linux prebuilt bundle passed the complete suite in an isolated test
+environment. A separate relocated macOS bundle also passed. Both temporary
+extractions were removed; host-specific operator metadata is retained locally,
+not added to this public report. These results do not establish the exclusions
+below or complete the checkpoint/restore milestone.
 
 Not covered: deterministic failures in open/lock/metadata/seek/close, allocator
 exhaustion, actual disk-full or power-cut injection, hostile directories, network
