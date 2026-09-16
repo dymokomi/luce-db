@@ -1,0 +1,242 @@
+import db
+import interop
+import memory
+import luce_db.schema as schema
+from luce_db.bytes import Buffer, compare
+
+func encode_cases() -> usize!:
+    var cases: usize
+    var encoded = try schema.encode("app", 0)
+    defer encoded.close()
+    assert(encoded.count == 18)
+    assert(compare(encoded.span()[..<4], schema.magic) == 0)
+    assert(try schema.decode(encoded.span(), "app") == 0)
+    var failed = false
+    discard(schema.decode(encoded.span(), "other") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover -1)
+    assert(failed)
+    var dummy: Buffer
+    failed = false
+    var empty = schema.encode("", 0) catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover dummy
+    if not failed:
+        empty.close()
+        trap("empty application")
+    assert(failed)
+    failed = false
+    var negative = schema.encode("app", -1) catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover dummy
+    if not failed:
+        negative.close()
+        trap("negative version")
+    assert(failed)
+    var long: u8[257]
+    for i in 0..<long.length: long[i] = 'a'
+    failed = false
+    var huge = schema.encode((str)long, 0) catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover dummy
+    if not failed:
+        huge.close()
+        trap("oversized application")
+    assert(failed)
+    var unicode = try schema.encode("猫", 7)
+    defer unicode.close()
+    assert(try schema.decode(unicode.span(), "猫") == 7)
+    var maxed = try schema.encode("app", schema.max_version)
+    defer maxed.close()
+    assert(try schema.decode(maxed.span(), "app") == schema.max_version)
+    cases += 8
+    for cut in 0..<encoded.count:
+        failed = false
+        discard(schema.decode(encoded.span()[..<cut], "app") catch failure:
+            assert(failure.code == db.corrupt)
+            failed = true
+            recover -1)
+        assert(failed)
+        cases += 1
+    for index in 0..<encoded.count:
+        let copy = try alloc u8[encoded.count] in memory.heap
+        defer free(copy)
+        memory.copy(copy, encoded.span(), encoded.count)
+        copy[index] ^= 1
+        failed = false
+        let decoded = schema.decode(copy, "app") catch failure:
+            assert(failure.code == db.invalid or failure.code == db.corrupt)
+            failed = true
+            recover -1
+        if index >= 10:
+            assert(not failed and decoded != 0)
+        else:
+            assert(failed)
+        cases += 1
+    let extra = try alloc u8[encoded.count + 1] in memory.heap
+    defer free(extra)
+    memory.copy(extra, encoded.span(), encoded.count)
+    extra[encoded.count] = 0
+    failed = false
+    discard(schema.decode(extra, "app") catch failure:
+        assert(failure.code == db.corrupt)
+        failed = true
+        recover -1)
+    assert(failed)
+    cases += 1
+    return cases
+
+func session(path: str) -> !:
+    var database = try db.Database(path)
+    defer database.close()
+    var failed = false
+    discard(database.initialize_schema("", "app") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover -1)
+    assert(failed)
+    failed = false
+    discard(database.initialize_schema("schema", "") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover -1)
+    assert(failed)
+    failed = false
+    let missing: interop.Reference[db.Migration]? = database.begin_migration("schema", "app", 0) catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover none
+    assert(failed and missing == none)
+    assert(try database.initialize_schema("schema", "app") == 1)
+    assert(try database.initialize_schema("schema", "app") == 1)
+    let empty = try database.snapshot()
+    defer empty.release()
+    assert((try empty.value().schema("schema", "app")) == 0)
+    failed = false
+    discard(empty.value().schema("schema", "other") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover none)
+    assert(failed)
+    failed = false
+    let gapped: interop.Reference[db.Migration]? = database.begin_migration("schema", "app", 1) catch failure:
+        assert(failure.code == db.conflict)
+        failed = true
+        recover none
+    assert(failed and gapped == none)
+    failed = false
+    let negative: interop.Reference[db.Migration]? = database.begin_migration("schema", "app", -1) catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover none
+    assert(failed and negative == none)
+    let first = try database.begin_migration("schema", "app", 0)
+    defer first.release()
+    try first.value().put("user/alice", b"\0\xff")
+    try first.value().put_text("index/alice", "user/alice")
+    try first.value().put("empty", b"")
+    failed = false
+    first.value().put("schema", b"nope") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover ()
+    assert(failed)
+    failed = false
+    first.value().remove("schema") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover ()
+    assert(failed)
+    failed = false
+    let leaked: interop.Reference[db.Value]? = first.value().get("schema") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover none
+    assert(failed and leaked == none)
+    assert(try first.value().commit() == 2)
+    let view = try database.snapshot()
+    defer view.release()
+    assert((try view.value().schema("schema", "app")) == 1)
+    assert(try view.value().count() == 4)
+    let alice = try view.value().get("user/alice") else trap("missing alice")
+    defer alice.release()
+    assert(compare(try alice.value().bytes(), b"\0\xff") == 0)
+    failed = false
+    let replay: interop.Reference[db.Migration]? = database.begin_migration("schema", "app", 0) catch failure:
+        assert(failure.code == db.conflict)
+        failed = true
+        recover none
+    assert(failed and replay == none)
+    let stale = try database.begin_migration("schema", "app", 1)
+    defer stale.release()
+    try stale.value().put_text("user/alice", "lost")
+    let winner = try database.begin_migration("schema", "app", 1)
+    defer winner.release()
+    try winner.value().put_text("user/bob", "Bob")
+    try winner.value().put_text("index/bob", "user/bob")
+    try winner.value().remove("empty")
+    assert(try winner.value().commit() == 3)
+    failed = false
+    discard(stale.value().commit() catch failure:
+        assert(failure.code == db.conflict)
+        failed = true
+        recover -1)
+    assert(failed)
+    assert((try view.value().schema("schema", "app")) == 1)
+    assert(try view.value().contains("empty"))
+    let after = try database.snapshot()
+    defer after.release()
+    assert((try after.value().schema("schema", "app")) == 2)
+    assert(try after.value().count() == 5)
+    assert(not try after.value().contains("empty"))
+    var backup_name: u8[4096]
+    var restore_name: u8[4096]
+    let exported = try format(backup_name, f"{path}.backup")
+    let restored_path = try format(restore_name, f"{path}.restored")
+    discard(try database.backup(exported))
+    discard(try db.restore_backup(exported, restored_path))
+    var restored = try db.Database(restored_path)
+    defer restored.close()
+    let restored_view = try restored.snapshot()
+    defer restored_view.release()
+    assert((try restored_view.value().schema("schema", "app")) == 2)
+    failed = false
+    discard(restored.initialize_schema("schema", "app") catch failure:
+        assert(failure.code == db.conflict)
+        failed = true
+        recover -1)
+    assert(failed)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    let encodings = try encode_cases()
+    try session(arguments[1])
+    var reopened = try db.Database(arguments[1])
+    defer reopened.close()
+    let reopened_view = try reopened.snapshot()
+    defer reopened_view.release()
+    assert((try reopened_view.value().schema("schema", "app")) == 2)
+    let dirty = try reopened.begin()
+    defer dirty.release()
+    try dirty.value().put_text("orphan", "no schema")
+    assert(try dirty.value().commit() == 4)
+    var plain_name: u8[4096]
+    let plain = try format(plain_name, f"{arguments[1]}.plain")
+    var unversioned = try db.Database(plain)
+    defer unversioned.close()
+    let seed = try unversioned.begin()
+    defer seed.release()
+    try seed.value().put_text("row", "data")
+    discard(try seed.value().commit())
+    var failed = false
+    discard(unversioned.initialize_schema("schema", "app") catch failure:
+        assert(failure.code == db.invalid)
+        failed = true
+        recover -1)
+    assert(failed)
+    print(f"PASS {encodings} schema encodings plus init/step/conflict/backup/restore/unversioned refusal")
+    return 0

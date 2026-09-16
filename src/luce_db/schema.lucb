@@ -1,0 +1,114 @@
+## Application schema metadata. Distinct from WAL/base format versions.
+import utf8
+import luce_db.engine as engine
+import luce_db.tree as tree
+from luce_db.bytes import Buffer, Reader, copied, compare, valid_key, invalid, limit, closed, conflict, corrupt
+
+pub let magic = b"LDSM"
+pub let encoding: u8 = 1
+pub let max_application: usize = 256
+pub let max_version: i64 = 9223372036854775807
+
+pub func valid_application(application: str) -> !:
+    if application.length == 0 or application.length > max_application or not utf8.valid(application.bytes):
+        error(invalid, "schema application must be nonempty UTF-8 of at most 256 bytes")
+
+pub func encode(application: str, version: i64) -> Buffer!:
+    try valid_application(application)
+    if version < 0: error(invalid, "schema version must be nonnegative")
+    var out: Buffer
+    errdefer out.close()
+    try out.put(magic)
+    try out.uint((u64)encoding, 1)
+    try out.uint((u64)application.length, 2)
+    try out.put(application.bytes)
+    try out.uint((u64)version, 8)
+    return out
+
+pub func decode(data: const u8[], application: str) -> i64!:
+    try valid_application(application)
+    var reader = Reader(bytes = data)
+    let prefix = try reader.take(4)
+    if compare(prefix, magic) != 0: error(corrupt, "invalid schema metadata")
+    let layout = try reader.uint(1)
+    if layout != (u64)encoding: error(corrupt, "unsupported schema metadata encoding")
+    let length = (usize)try reader.uint(2)
+    if length == 0 or length > max_application: error(corrupt, "invalid schema application length")
+    let stored = try reader.take(length)
+    if not utf8.valid(stored): error(corrupt, "schema application is not UTF-8")
+    if compare(stored, application.bytes) != 0: error(invalid, "schema application does not match")
+    let version = try reader.uint(8)
+    if version > (u64)max_version: error(corrupt, "schema version exceeds supported range")
+    if reader.offset != data.length: error(corrupt, "trailing schema metadata")
+    return (i64)version
+
+pub func current(view: engine.View, key: str, application: str) -> i64?!:
+    let item = try view.get(key)
+    let entry = item else return none
+    return try decode(entry.value.span(), application)
+
+pub func initialize(store: engine.Store*, key: str, application: str, wait_ms: i64 = 0) -> u64!:
+    try valid_key(key)
+    try valid_application(application)
+    var tx = try engine.transaction(store)
+    errdefer tx.close()
+    if tree.count(tx.view.root) == 0:
+        var metadata = try encode(application, 0)
+        defer metadata.close()
+        try tx.put(key, metadata.span())
+        return try tx.commit(wait_ms)
+    let version = (try current(tx.view, key, application)) else error(invalid, "unversioned records cannot be adopted as schema zero")
+    if version != 0: error(conflict, "schema is already initialized")
+    let generation = tx.view.generation
+    tx.close()
+    return generation
+
+pub struct Migration:
+    var transaction: engine.Transaction
+    var key: Buffer
+    var metadata: Buffer
+
+    func schema_key(key: str) -> bool:
+        return compare(key.bytes, self.key.span()) == 0
+
+    pub func get(key: str) -> tree.Entry*?!:
+        if self.schema_key(key): error(invalid, "cannot read schema metadata through a migration")
+        return try self.transaction.view.get(key)
+
+    pub func contains(key: str) -> bool!:
+        return try self.get(key) != none
+
+    pub mutating func put(key: str, value: const u8[], only_new: bool = false) -> !:
+        if self.schema_key(key): error(invalid, "cannot mutate schema metadata key")
+        try self.transaction.put(key, value, only_new)
+
+    pub mutating func remove(key: str) -> !:
+        if self.schema_key(key): error(invalid, "cannot mutate schema metadata key")
+        try self.transaction.remove(key)
+
+    pub mutating func commit(wait_ms: i64 = 0) -> u64!:
+        let generation = try self.transaction.commit(wait_ms)
+        self.key.close()
+        self.metadata.close()
+        return generation
+
+    pub mutating func close():
+        self.transaction.close()
+        self.key.close()
+        self.metadata.close()
+
+pub func begin(store: engine.Store*, key: str, application: str, expected_version: i64) -> Migration!:
+    try valid_key(key)
+    try valid_application(application)
+    if expected_version < 0: error(invalid, "schema version must be nonnegative")
+    if expected_version == max_version: error(limit, "schema version exhausted")
+    var tx = try engine.transaction(store)
+    errdefer tx.close()
+    let version = (try current(tx.view, key, application)) else error(invalid, "schema is not initialized")
+    if version != expected_version: error(conflict, "schema version does not match")
+    var metadata = try encode(application, expected_version + 1)
+    errdefer metadata.close()
+    var owned_key = try copied(key.bytes)
+    errdefer owned_key.close()
+    try tx.put(key, metadata.span())
+    return Migration(transaction = tx, key = owned_key, metadata = metadata)

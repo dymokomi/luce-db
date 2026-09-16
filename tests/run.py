@@ -13,6 +13,8 @@ from check_checkpoint import check as check_checkpoint
 from check_checkpoint_process import check as check_checkpoint_process
 from check_backup import check as check_backup
 from check_backup_process import check as check_backup_process
+from check_migration import check as check_migration
+from check_migration_process import check as check_migration_process
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,8 +56,13 @@ def main():
             ("backup_tests", "backups"), ("backup_fault_tests", "backup_faults"),
             ("backup_concurrency", "backup_concurrency"), ("backup_allocations", "backup_allocations"),
             ("restore_fault_tests", "restore_faults"), ("backup_process", "backup_process"),
-            ("backup_race", "backup_race")]]
+            ("backup_race", "backup_race"), ("schema_tests", "schemas"),
+            ("migration_concurrency", "migration_concurrency"),
+            ("migration_allocations", "migration_allocations"),
+            ("migration_fault_tests", "migration_faults"),
+            ("migration_process", "migration_process")]]
         programs += [(ROOT / "tests/backup_driver.lucb", "backup_driver")]
+        programs += [(ROOT / "src/luce_db/schema_driver.lucb", "migration_driver")]
         for source, name in programs:
             run([args.base.resolve(), "build", source, *flags, "-o", output / name])
         run([args.luce.resolve(), "build", ROOT / "tests/facade.luc", *flags, "-o", output / "facade"])
@@ -65,13 +72,16 @@ def main():
             for name in ["transactions", "bounds", "concurrency", "facade", "storage_faults", "checkpoints", "checkpoint_faults", "checkpoint_concurrency", "checkpoint_allocations"]:
                 run([output / name, Path(tmp) / f"{name}.db"])
             run([output / "concurrency", Path(tmp) / "concurrency-wait.db", "wait"])
-            for name in ["backups", "backup_faults", "backup_concurrency", "backup_allocations", "restore_faults", "backup_race"]:
+            for name in ["backups", "backup_faults", "backup_concurrency", "backup_allocations", "restore_faults", "backup_race",
+                         "schemas", "migration_concurrency", "migration_allocations", "migration_faults"]:
                 run([output / name, Path(tmp) / f"{name}.db"])
         check_journal(output / "journal_driver")
         check_checkpoint(output / "checkpoint_driver")
         check_checkpoint_process(output / "checkpoint_driver", output / "checkpoint_process")
         check_backup(output / "backup_driver", output / "checkpoint_driver")
         check_backup_process(output / "backup_driver", output / "checkpoint_driver", output / "backup_process")
+        check_migration(output / "migration_driver")
+        check_migration_process(output / "migration_process")
         check_http(output / "registry_server")
         print(f"PASS {mode} ({time.monotonic() - start:.1f}s)", flush=True)
     print(f"PASS all {len(selected)} selected compiler modes", flush=True)

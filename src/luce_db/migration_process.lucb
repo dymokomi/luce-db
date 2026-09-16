@@ -1,0 +1,41 @@
+## Process-observable schema step fixture. Disposable inputs only.
+import db
+import io
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length >= 3)
+    var database = try db.Database(arguments[2])
+    defer database.close()
+    if arguments[1] == "init":
+        print(f"INIT {try database.initialize_schema("schema", "app")}")
+        try io.flush_stdout()
+    elif arguments[1] == "crash":
+        var start: i64 = 0
+        let snapshot = try database.snapshot()
+        if (try snapshot.value().schema("schema", "app")) == none:
+            snapshot.release()
+            print(f"INIT {try database.initialize_schema("schema", "app")}")
+            try io.flush_stdout()
+        else:
+            start = (try snapshot.value().schema("schema", "app")) else 0
+            snapshot.release()
+        for version in (usize)start..<10000:
+            let migration = try database.begin_migration("schema", "app", (i64)version)
+            defer migration.release()
+            var key: u8[32]
+            try migration.value().put_text(try format(key, f"item/{version + 1}"), "ok")
+            let generation = try migration.value().commit()
+            print(f"ACK {version + 1} {generation}")
+            try io.flush_stdout()
+    elif arguments[1] == "inspect":
+        let snapshot = try database.snapshot()
+        defer snapshot.release()
+        let version = (try snapshot.value().schema("schema", "app")) else -1
+        print(f"SCHEMA {version} {try snapshot.value().generation()} {try snapshot.value().count()}")
+        try io.flush_stdout()
+        for index in 0..<try snapshot.value().count():
+            print(try snapshot.value().key_at(index) else "missing")
+            try io.flush_stdout()
+    else:
+        trap("unknown schema process mode")
+    return 0

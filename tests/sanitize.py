@@ -20,7 +20,7 @@ def main():
         subprocess.run([str(arg) for arg in command], cwd=ROOT, env=environment, check=True, timeout=180)
 
     with tempfile.TemporaryDirectory(prefix="luce-db-sanitizers-") as tmp:
-        for name in ["transactions", "bounds", "concurrency", "writers", "storage_faults", "checkpoints", "checkpoint_faults", "checkpoint_concurrency", "checkpoint_allocations", "checkpoint_driver", "checkpoint_process", "backups", "backup_faults", "backup_concurrency", "backup_allocations", "restore_faults", "backup_process", "backup_driver", "backup_race"]:
+        for name in ["transactions", "bounds", "concurrency", "writers", "storage_faults", "checkpoints", "checkpoint_faults", "checkpoint_concurrency", "checkpoint_allocations", "checkpoint_driver", "checkpoint_process", "backups", "backup_faults", "backup_concurrency", "backup_allocations", "restore_faults", "backup_process", "backup_driver", "backup_race", "schemas", "migration_concurrency", "migration_allocations", "migration_faults", "migration_driver", "migration_process"]:
             generated = output / f"{name}.c"
             executable = output / name
             source = ROOT / "src/luce_db/writer_tests.lucb" if name == "writers" else ROOT / f"tests/{name}.lucb"
@@ -30,20 +30,26 @@ def main():
                         "checkpoint_process": "checkpoint_process", "backups": "backup_tests",
                         "backup_faults": "backup_fault_tests", "backup_concurrency": "backup_concurrency",
                         "backup_allocations": "backup_allocations", "restore_faults": "restore_fault_tests",
-                        "backup_process": "backup_process", "backup_race": "backup_race"}
+                        "backup_process": "backup_process", "backup_race": "backup_race",
+                        "schemas": "schema_tests", "migration_concurrency": "migration_concurrency",
+                        "migration_allocations": "migration_allocations", "migration_faults": "migration_fault_tests",
+                        "migration_process": "migration_process", "migration_driver": "schema_driver"}
             if name in internal: source = ROOT / f"src/luce_db/{internal[name]}.lucb"
             run([base, "build", source, "--emit=c", "-o", generated])
             run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g", "-w", "-fno-strict-aliasing",
                  "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I", runtime,
                  generated, runtime / "lucb_rt.c", "-pthread", "-lm", "-o", executable])
-            if name not in ("checkpoint_driver", "checkpoint_process", "backup_driver", "backup_process"):
+            if name not in ("checkpoint_driver", "checkpoint_process", "backup_driver", "backup_process",
+                            "migration_driver", "migration_process"):
                 run([executable, Path(tmp) / f"{name}.db"])
             if name == "concurrency": run([executable, Path(tmp) / "concurrency-wait.db", "wait"])
         run([sys.executable, ROOT / "tests/check_checkpoint.py", output / "checkpoint_driver"])
         run([sys.executable, ROOT / "tests/check_checkpoint_process.py", output / "checkpoint_driver", output / "checkpoint_process"])
         run([sys.executable, ROOT / "tests/check_backup.py", output / "backup_driver", output / "checkpoint_driver"])
         run([sys.executable, ROOT / "tests/check_backup_process.py", output / "backup_driver", output / "checkpoint_driver", output / "backup_process"])
-    print("PASS address/undefined-behavior sanitizers: previous suites plus checkpoint/backup native/fault/worker/allocation/oracle/process cases", flush=True)
+        run([sys.executable, ROOT / "tests/check_migration.py", output / "migration_driver"])
+        run([sys.executable, ROOT / "tests/check_migration_process.py", output / "migration_process"])
+    print("PASS address/undefined-behavior sanitizers: previous suites plus checkpoint/backup/schema native/fault/worker/allocation/oracle/process cases", flush=True)
 
 
 if __name__ == "__main__": main()

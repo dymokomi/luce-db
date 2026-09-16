@@ -64,6 +64,10 @@ name, not hyphenated import syntax. See [tests/facade.luc](tests/facade.luc).
 - `verify_backup(path)` / `restore_backup(input, destination)`: strict read-only
   validation and bounded no-overwrite restore. See [backup semantics and failure
   recovery](docs/BACKUPS.md); CRC verification is not authentication.
+- `initialize_schema(key, application)` / `Snapshot.schema` /
+  `begin_migration(key, application, expected_version)`: explicit application
+  schema versions, distinct from WAL format. One exact source version per
+  migration transaction; see [schema migrations](docs/MIGRATIONS.md).
 
 Native Base callers explicitly release returned `interop.Reference` carriers.
 Luce owns them through its normal managed-object lifetime. Explicit `close()` is

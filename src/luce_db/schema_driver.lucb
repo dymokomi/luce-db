@@ -1,0 +1,39 @@
+import db
+import luce_db.schema as schema
+
+func decimal(text: str) -> i64!:
+    if text.length == 0: trap("missing integer")
+    var value: i64 = 0
+    for byte in text.bytes:
+        if byte < '0' or byte > '9': trap("invalid integer")
+        value = value * 10 + (i64)(byte - '0')
+    return value
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length >= 3)
+    if arguments[1] == "encode":
+        let version = try decimal(arguments[3])
+        var encoded = try schema.encode(arguments[2], version)
+        defer encoded.close()
+        print(f"BYTES {encoded.count}")
+        for byte in encoded.span():
+            print(f"{byte}")
+        return 0
+    var database = try db.Database(arguments[2])
+    defer database.close()
+    if arguments[1] == "init":
+        print(f"INIT {try database.initialize_schema("schema", arguments[3])}")
+    elif arguments[1] == "migrate":
+        let expected = try decimal(arguments[3])
+        let migration = try database.begin_migration("schema", arguments[4], expected)
+        defer migration.release()
+        try migration.value().put_text(arguments[5], arguments[6])
+        print(f"COMMIT {try migration.value().commit()}")
+    elif arguments[1] == "schema":
+        let snapshot = try database.snapshot()
+        defer snapshot.release()
+        let version = (try snapshot.value().schema("schema", arguments[3])) else -1
+        print(f"SCHEMA {version} {try snapshot.value().count()}")
+    else:
+        trap("unknown schema driver mode")
+    return 0

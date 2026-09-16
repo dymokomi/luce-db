@@ -3,6 +3,7 @@ import luce_db.bytes
 import luce_db.engine as engine
 import luce_db.tree as tree
 import luce_db.backup as backup
+import luce_db.schema as schema_meta
 import interop
 import memory
 import utf8
@@ -73,6 +74,10 @@ pub struct Snapshot:
         let item = tree.at(self.view.root, (usize)index) else return none
         return (str)item.key.span()
 
+    ## none if the key is absent. Corrupt/mismatched metadata is an error.
+    pub func schema(key: str, application: str) -> i64?!:
+        return try schema_meta.current(self.view, key, application)
+
     pub mutating func close():
         self.view.close()
 
@@ -111,6 +116,39 @@ pub struct Transaction:
         self.transaction.close()
 
 pub let transaction_type: interop.Type[Transaction] = interop.Type[Transaction]("DatabaseTransaction", Transaction.close, closeable = true)
+
+## One schema step. The reserved version update is already in this transaction.
+pub struct Migration:
+    var migration: schema_meta.Migration
+
+    pub func get(key: str) -> interop.Reference[Value]?!:
+        return try owned_value(try self.migration.get(key))
+
+    pub func contains(key: str) -> bool!:
+        return try self.migration.contains(key)
+
+    pub mutating func put(key: str, value: const u8[]) -> !:
+        try self.migration.put(key, value)
+
+    pub mutating func put_text(key: str, value: str) -> !:
+        try self.migration.put(key, value.bytes)
+
+    pub mutating func insert(key: str, value: const u8[]) -> !:
+        try self.migration.put(key, value, only_new = true)
+
+    pub mutating func insert_text(key: str, value: str) -> !:
+        try self.migration.put(key, value.bytes, only_new = true)
+
+    pub mutating func remove(key: str) -> !:
+        try self.migration.remove(key)
+
+    pub mutating func commit(wait_ms: i64 = 0) -> i64!:
+        return (i64)try self.migration.commit(wait_ms)
+
+    pub mutating func close():
+        self.migration.close()
+
+pub let migration_type: interop.Type[Migration] = interop.Type[Migration]("DatabaseMigration", Migration.close, closeable = true)
 
 ## Embedded database, not a network server. Share native engine access with workers;
 ## never move a Luce/interop managed reference across threads. Close after joining.
@@ -152,6 +190,19 @@ pub struct Database:
     pub func backup(path: str) -> BackupInfo!:
         let store = self.store else error(closed, "database is closed")
         return try engine.backup_to(store, path)
+
+    ## Schema zero on a genuinely empty store. Matching existing zero is a no-op.
+    pub func initialize_schema(key: str, application: str, wait_ms: i64 = 0) -> i64!:
+        let store = self.store else error(closed, "database is closed")
+        return (i64)try schema_meta.initialize(store, key, application, wait_ms)
+
+    pub func begin_migration(key: str, application: str, expected_version: i64) -> interop.Reference[Migration]!:
+        let store = self.store else error(closed, "database is closed")
+        var migration = try schema_meta.begin(store, key, application, expected_version)
+        let native = new Migration(migration = migration) in memory.heap catch failure:
+            migration.close()
+            error(failure.code, failure.message)
+        return try interop.Reference[Migration].adopt(native, migration_type, memory.heap)
 
     pub mutating func close():
         if let store = self.store: engine.drop(store)

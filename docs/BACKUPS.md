@@ -179,7 +179,7 @@ the archive and logs were retained. The transient test unit was absent/inactive,
 and before/after live-application and reverse-proxy checks matched. No live
 configuration, application data or credentials changed.
 
-Still required: application schema/migrations; package/DB/object consistency and
+Still required: package/DB/object consistency and
 fresh-machine operational restore; backup signing/encryption/custody/retention;
 aggregate memory/disk admission and measurements; independent review. A structurally
 valid DB backup alone cannot prove that referenced Git objects or side effects exist.

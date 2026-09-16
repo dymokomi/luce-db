@@ -1,0 +1,117 @@
+## Deterministic commit I/O faults during a schema step. Disposable paths only.
+import c
+import files
+import io
+import luce_db.engine as engine
+import luce_db.schema as schema
+import luce_db.storage_io as storage
+from luce_db.bytes import uncertain, compare
+
+struct Audit:
+    var writes: usize
+    var syncs: usize
+    var fail_sync: usize
+    var write_cut: usize = 18446744073709551615
+    var written: usize
+
+func state(raw: void*?) -> Audit*:
+    return (Audit*)(raw else trap("missing schema I/O audit"))
+
+func write(raw: void*?, file: files.File*, data: const u8[]) -> usize!:
+    let audit = state(raw)
+    audit.writes += 1
+    if audit.written == audit.write_cut: error(io.failed, "injected schema write error")
+    var count = data.length
+    if count > audit.write_cut - audit.written: count = audit.write_cut - audit.written
+    let transferred = try file.write(data[..<count])
+    audit.written += transferred
+    if audit.written == audit.write_cut: error(io.failed, "injected schema write error after transfer")
+    return transferred
+
+func synchronize(raw: void*?, file: files.File*) -> !:
+    let audit = state(raw)
+    audit.syncs += 1
+    if audit.writes > 0 and audit.fail_sync == 1: error(io.failed, "injected schema sync error")
+    try file.sync()
+    if audit.writes > 0 and audit.fail_sync == 2: error(io.failed, "injected schema sync error after fsync")
+
+func controls(audit: Audit*) -> storage.Controls:
+    return storage.Controls(context = audit, write = write, sync = synchronize)
+
+func check(path: str, generation: u64, version: i64, alice: bool) -> !:
+    let store = try engine.open(path)
+    defer engine.drop(store)
+    var view = try engine.snapshot(store)
+    defer view.close()
+    assert(view.generation == generation)
+    assert((try schema.current(view, "schema", "app")) == version)
+    assert((try view.get("user/alice") != none) == alice)
+    if alice:
+        let item = try view.get("user/alice") else trap("missing alice")
+        assert(compare(item.value.span(), b"Alice") == 0)
+
+func seed(path: str) -> !:
+    let store = try engine.open(path)
+    defer engine.drop(store)
+    assert(try schema.initialize(store, "schema", "app") == 1)
+
+func migrate(path: str, audit: Audit*) -> u64!:
+    let store = try engine.open(path, controls(audit))
+    defer engine.drop(store)
+    var migration = try schema.begin(store, "schema", "app", 0)
+    defer migration.close()
+    try migration.put("user/alice", b"Alice")
+    return try migration.commit()
+
+func recovered(path: str) -> !:
+    let store = try engine.open(path)
+    defer engine.drop(store)
+    var view = try engine.snapshot(store)
+    defer view.close()
+    let version = try schema.current(view, "schema", "app")
+    let has_alice = try view.get("user/alice") != none
+    assert(version == 0 or version == 1)
+    assert(has_alice == (version == 1))
+    assert(view.generation == (1 if version == 0 else 2))
+    if version == 1:
+        let item = try view.get("user/alice") else trap("missing alice")
+        assert(compare(item.value.span(), b"Alice") == 0)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    var cases: usize
+    try seed(arguments[1])
+    let original = try files.read_limit((c.str)arguments[1], 4096)
+    defer free(original)
+    var clean = Audit()
+    assert(try migrate(arguments[1], &clean) == 2)
+    try check(arguments[1], 2, 1, true)
+    cases += 1
+    for kind in 1..<(usize)3:
+        var name: u8[4096]
+        let path = try format(name, f"{arguments[1]}-sync-{kind}")
+        try seed(path)
+        var audit = Audit(fail_sync = kind)
+        var refused = false
+        discard(migrate(path, &audit) catch failure:
+            assert(failure.code == uncertain)
+            refused = true
+            recover 0)
+        assert(refused)
+        try recovered(path)
+        cases += 1
+    for cut in 0..<original.length + 32:
+        var name: u8[4096]
+        let path = try format(name, f"{arguments[1]}-cut-{cut}")
+        try seed(path)
+        var audit = Audit(write_cut = cut)
+        var refused = false
+        discard(migrate(path, &audit) catch failure:
+            assert(failure.code == uncertain or failure.code == io.failed)
+            refused = true
+            recover 0)
+        if not refused: try check(path, 2, 1, true)
+        else: try recovered(path)
+        cases += 1
+    print(f"PASS {cases} schema migration commit I/O faults with matching version and records")
+    return 0
