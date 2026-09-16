@@ -62,3 +62,24 @@ Not provided: legacy adoption, multi-step orchestration, service-wide
 maintenance mode, schema-key security, signing, or package/object consistency.
 Ordinary transactions can still write the metadata key; that is a convention,
 not an access-control boundary.
+
+## Verification
+
+Local macOS arm64 passed all six compiler modes and expanded ASan/UBSan, with
+prior DB gates retained. Published/tested source:
+`f6f96784764d17da1e33e8a6a6f2243e8d6e0d09`.
+[CI run 35055536821](https://github.com/dymokomi/luce-db/actions/runs/35055536821)
+passed on Ubuntu 24.04 x86_64 (9m16s) and macOS 15 arm64 (10m15s), including the
+larger-than-frame checkpoint/backup profiles.
+
+The Linux native-opt-3 archive had SHA-256
+`4871cd0eea6e87929d03e74333ff159e21fb05696afb0fb3031f44f6b3ce1c2a`.
+Before execution, local and remote checks verified its exact revision, 43 unique
+allowlisted regular members, 42 content hashes, permissions/size bounds and all
+29 ELF64 x86_64 executable headers. The complete prebuilt suite passed on an
+isolated second host under the unchanged [test protections](VPS_TESTING.md):
+private network/temporary storage, read-only host/input, dynamic user, 25% CPU,
+512 MiB memory maximum and 180-second deadline. Reported runtime was 31.715 seconds
+and CPU time 5.250 seconds. Exact stage removed; live applications and reverse
+proxy unchanged. This is not aggregate admission, independent review or registry
+readiness.
