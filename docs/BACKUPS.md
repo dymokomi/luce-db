@@ -150,8 +150,34 @@ larger-than-frame profile also passed. Logs: ignored `build/backup-correctness.l
 full HTTP fixtures passed with each of native-opt-2 and C-debug. Earlier syntax,
 sandbox-bind and pre-fix race runs remain separate failed/incomplete evidence.
 Sanitizers cover the generated-C native/fault/worker/heap/oracle/process programs,
-not the generated high-level Luce consumer or the HTTP fixture. Hosted CI and
-isolated-host verification remain pending; no production-readiness claim.
+not the generated high-level Luce consumer or the HTTP fixture.
+
+Published/tested source: `19b3d2c4854a9790e59b16c7ac256bddcaae5ebb`.
+[CI run 34946319620](https://github.com/dymokomi/luce-db/actions/runs/34946319620)
+passed all six modes, expanded sanitizers and the larger-than-frame backup profile
+on Ubuntu 24.04 x86_64 (7m50s) and macOS 15 arm64 (9m2s). Downloaded per-platform
+logs confirm the scope above; this is not inferred from an earlier revision.
+
+The Linux native-opt-3 archive had SHA-256
+`234eed3019cb5b28bcec179056d0031a8523efe6bae161f3d7839988843ec964`.
+Before execution, local and remote checks verified its exact revision, 35 unique
+allowlisted regular members, 34 content hashes, permissions/size bounds and all
+23 ELF64 x86_64 executable headers. The complete prebuilt suite passed on an
+isolated second host under the unchanged [test protections](VPS_TESTING.md):
+private network/temporary storage, read-only host/input, dynamic user, 25% CPU,
+512 MiB memory maximum and 180-second deadline. Reported runtime was 28.405 seconds
+and CPU time 4.672 seconds. These are suite observations, not database throughput,
+memory-capacity, security-review or hardware-durability guarantees.
+
+That run included the 452 quick strict-format cases, 118 export-fault cases,
+48 restore-fault cases, 28 heap-failure paths, four gated concurrency cases,
+100 eight-thread destination races, 28 process/ownership/mutation cases, actual
+Luce ownership, the concurrent HTTP invitation/backup/restart fixture and all
+previous prebuilt suites. The eighteen-1-MiB-value profile ran locally and in CI,
+not on the second host. The exact extraction stage was removed after verification;
+the archive and logs were retained. The transient test unit was absent/inactive,
+and before/after live-application and reverse-proxy checks matched. No live
+configuration, application data or credentials changed.
 
 Still required: application schema/migrations; package/DB/object consistency and
 fresh-machine operational restore; backup signing/encryption/custody/retention;
