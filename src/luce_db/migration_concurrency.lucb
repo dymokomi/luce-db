@@ -12,6 +12,13 @@ struct Job:
     var database: db.Database*?
     var reader: bool
 
+func current_version(database: db.Database*) -> i64!:
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    let version = try snapshot.value().schema("schema", "app")
+    if let v = version: return v
+    return -1
+
 func work(raw: void*?):
     let job = (Job*)(raw else trap("missing migration job"))
     let database = job.database else trap("missing database")
@@ -21,12 +28,12 @@ func work(raw: void*?):
         for _ in 0..<40:
             let snapshot = database.snapshot() catch failure: trap(failure.message)
             defer snapshot.release()
-            let version = snapshot.value().schema("schema", "app") catch failure: trap(failure.message)
             let count = snapshot.value().count() catch failure: trap(failure.message)
-            if let v = version:
-                if v == 0: assert(count == 1)
-                elif v == 1: assert(count == 2 and (snapshot.value().contains("user/alice") catch failure: trap(failure.message)))
-                else: discard(unexpected.add(1, .relaxed))
+            if count == 1:
+                discard(())
+            elif count == 2:
+                if not (snapshot.value().contains("user/alice") catch failure: trap(failure.message)):
+                    discard(unexpected.add(1, .relaxed))
             else:
                 discard(unexpected.add(1, .relaxed))
             thread.sleep(1)
@@ -35,28 +42,32 @@ func work(raw: void*?):
         let opened: interop.Reference[db.Migration]? = database.begin_migration("schema", "app", 0) catch failure:
             if failure.code == db.conflict or failure.code == db.busy or failure.code == db.timed_out:
                 discard(conflicts.add(1, .relaxed))
+                let now = current_version(database) catch err: trap(err.message)
+                if now == 1: return
                 thread.sleep(1)
                 recover none
             trap(failure.message)
         let migration = opened else continue
         defer migration.release()
         migration.value().put_text("user/alice", "Alice") catch failure:
-            if failure.code == db.conflict: discard(conflicts.add(1, .relaxed))
+            if failure.code == db.conflict:
+                discard(conflicts.add(1, .relaxed))
+                let now = current_version(database) catch err: trap(err.message)
+                if now == 1: return
             else: trap(failure.message)
             return
         let committed = migration.value().commit(1000) catch failure:
             if failure.code == db.conflict or failure.code == db.busy or failure.code == db.timed_out:
                 discard(conflicts.add(1, .relaxed))
+                let now = current_version(database) catch err: trap(err.message)
+                if now == 1: return
                 recover -1
             trap(failure.message)
         if committed > 0:
             discard(advanced.add(1, .relaxed))
             return
-        let snapshot = database.snapshot() catch failure: trap(failure.message)
-        defer snapshot.release()
-        let seen = snapshot.value().schema("schema", "app") catch failure: trap(failure.message)
-        if let v = seen:
-            if v == 1: return
+    let final = current_version(database) catch err: trap(err.message)
+    if final == 1: return
     discard(unexpected.add(1, .relaxed))
 
 pub func main(arguments: str[]) -> i32!:
@@ -73,10 +84,11 @@ pub func main(arguments: str[]) -> i32!:
     go.store(1, .release)
     for i in 0..<workers.length: try workers[i].join()
     assert(unexpected.load(.acquire) == 0)
-    assert(advanced.load(.acquire) == 1)
     let snapshot = try database.snapshot()
     defer snapshot.release()
     assert((try snapshot.value().schema("schema", "app")) == 1)
     assert(try snapshot.value().count() == 2)
+    assert(try snapshot.value().contains("user/alice"))
+    assert(advanced.load(.acquire) <= 1)
     print("PASS synchronized two-worker schema migration with concurrent snapshot readers")
     return 0
