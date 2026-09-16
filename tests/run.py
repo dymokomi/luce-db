@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -83,6 +84,7 @@ def main():
         check_migration(output / "migration_driver")
         check_migration_process(output / "migration_process")
         check_http(output / "registry_server")
+        subprocess.run([sys.executable, "tests/check_resources.py", output], cwd=ROOT, check=True, timeout=180)
         print(f"PASS {mode} ({time.monotonic() - start:.1f}s)", flush=True)
     print(f"PASS all {len(selected)} selected compiler modes", flush=True)
 

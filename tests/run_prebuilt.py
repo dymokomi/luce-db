@@ -13,6 +13,7 @@ from check_backup import check as check_backup
 from check_backup_process import check as check_backup_process
 from check_migration import check as check_migration
 from check_migration_process import check as check_migration_process
+from check_resources import main as check_resources
 
 
 def main():
@@ -43,6 +44,7 @@ def main():
     check_migration(binaries / "migration_driver")
     check_migration_process(binaries / "migration_process")
     check_http(binaries / "registry_server")
+    check_resources(binaries)
     print("PASS prebuilt database suite", flush=True)
 
 

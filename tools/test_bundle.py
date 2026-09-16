@@ -16,7 +16,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     programs = ["tree", "writers", "storage_faults", "transactions", "bounds", "concurrency", "facade", "journal_driver", "registry_server", "checkpoints", "checkpoint_faults", "checkpoint_concurrency", "checkpoint_allocations", "checkpoint_driver", "checkpoint_process", "backups", "backup_faults", "backup_concurrency", "backup_allocations", "restore_faults", "backup_process", "backup_driver", "backup_race", "schemas", "migration_concurrency", "migration_allocations", "migration_faults", "migration_driver", "migration_process"]
-    scripts = ["run_prebuilt.py", "check_http.py", "check_journal.py", "check_checkpoint.py", "check_checkpoint_process.py", "check_backup.py", "check_backup_process.py", "check_migration.py", "check_migration_process.py"]
+    scripts = ["run_prebuilt.py", "check_http.py", "check_journal.py", "check_checkpoint.py", "check_checkpoint_process.py", "check_backup.py", "check_backup_process.py", "check_migration.py", "check_migration_process.py", "check_resources.py"]
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     manifest = []
     with tarfile.open(args.output, "w:gz") as bundle:

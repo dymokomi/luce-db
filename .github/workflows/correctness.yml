@@ -60,6 +60,9 @@ jobs:
       - name: Backup and restore larger than one transaction frame
         working-directory: luce-db
         run: python3 tests/check_backup.py build/native3/backup_driver build/native3/checkpoint_driver --full
+      - name: Aggregate process RSS measurements
+        working-directory: luce-db
+        run: python3 tests/check_resources.py build/native3
       - name: Package Linux test binaries
         if: runner.os == 'Linux'
         working-directory: luce-db
