@@ -9,11 +9,12 @@ var g_port: @u64
 var g_ready: @u64
 var g_qx: u8[32]
 var g_qy: u8[32]
-var g_dir: str = "/tmp/luce-db-tls-test"
+var g_path: str
+var g_stop: @u64
 
 func owner_main(raw: void*?):
     discard(raw)
-    let database = db.Database.open("/tmp/luce-db-tls-test/root.db", "secret") catch failure:
+    let database = db.Database.open(g_path, "secret") catch failure:
         return
     defer database.release()
     let port = database.value().listen_tls("localhost", 0) catch failure:
@@ -27,18 +28,20 @@ func owner_main(raw: void*?):
         g_qy[i] = y[i]
     g_port.store((u64)port, .release)
     g_ready.store(1, .release)
-    var k: usize = 0
-    while k < 500:
-        thread.sleep(20)
-        k += 1
+    while g_stop.load(.acquire) == 0:
+        thread.sleep(1)
+
+func stop_owner(worker: thread.Handle):
+    g_stop.store(1, .release)
+    worker.join() catch failure: trap(failure.message)
 
 pub func main(arguments: str[]) -> i32!:
-    discard(arguments)
-    files.delete_path(g_dir, true) catch failure:
-        discard(failure)
-    try files.make_directory(g_dir)
+    assert(arguments.length == 2)
+    g_path = arguments[1]
     g_ready.store(0, .relaxed)
-    discard(try thread.spawn(owner_main, none, name = "db-tls"))
+    g_stop.store(0, .relaxed)
+    let worker = try thread.spawn(owner_main, none, name = "db-tls")
+    defer stop_owner(worker)
     var i: usize = 0
     while g_ready.load(.acquire) == 0 and i < 400:
         thread.sleep(10)
@@ -54,7 +57,7 @@ pub func main(arguments: str[]) -> i32!:
     defer text.release()
     try tx.value().set("/notes", "text", text)
     discard(try tx.value().commit())
-    tx.release()
+    tx.value().close()
     let snap = try client.value().snapshot()
     defer snap.release()
     let got = try snap.value().get("/notes", "text")

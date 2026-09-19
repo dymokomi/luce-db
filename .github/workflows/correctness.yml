@@ -23,7 +23,9 @@ jobs:
         run: |
           echo "base=$(tr -d '\n' < luce-db/bootstrap/BASE)" >> "$GITHUB_OUTPUT"
           echo "luce=$(tr -d '\n' < luce-db/bootstrap/LUCE)" >> "$GITHUB_OUTPUT"
-          echo "server=$(tr -d '\n' < luce-db/bootstrap/SERVER)" >> "$GITHUB_OUTPUT"
+          echo "prism=$(tr -d '\n' < luce-db/bootstrap/PRISM)" >> "$GITHUB_OUTPUT"
+          echo "tls=$(tr -d '\n' < luce-db/bootstrap/TLS)" >> "$GITHUB_OUTPUT"
+          echo "crypto=$(tr -d '\n' < luce-db/bootstrap/CRYPTO)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: dymokomi/luce-base
@@ -36,9 +38,19 @@ jobs:
           path: luce
       - uses: actions/checkout@v4
         with:
-          repository: dymokomi/luce-server
-          ref: ${{ steps.pins.outputs.server }}
-          path: luce-server
+          repository: dymokomi/luce-prism
+          ref: ${{ steps.pins.outputs.prism }}
+          path: luce-prism
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-tls
+          ref: ${{ steps.pins.outputs.tls }}
+          path: luce-tls
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-crypto
+          ref: ${{ steps.pins.outputs.crypto }}
+          path: luce-crypto
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -50,29 +62,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 tests/run.py 2>&1 | tee build/correctness.log
-      - name: Memory safety instrumentation
-        working-directory: luce-db
-        run: python3 tests/sanitize.py
-      - name: Checkpoint larger than one transaction frame
-        working-directory: luce-db
-        run: python3 tests/check_checkpoint.py build/native3/checkpoint_driver --full
-      - name: Backup and restore larger than one transaction frame
-        working-directory: luce-db
-        run: python3 tests/check_backup.py build/native3/backup_driver build/native3/checkpoint_driver --full
-      - name: Aggregate process RSS measurements
-        working-directory: luce-db
-        run: python3 tests/check_resources.py build/native3
-      - name: Package Linux test binaries
-        if: runner.os == 'Linux'
-        working-directory: luce-db
-        run: python3 tools/test_bundle.py --output build/luce-db-smoke-x86_64-linux.tar.gz
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Linux'
-        with:
-          name: luce-db-smoke-x86_64-linux
-          path: luce-db/build/luce-db-smoke-x86_64-linux.tar.gz
-          retention-days: 7
+          python3 tests/run.py --mode all 2>&1 | tee build/correctness.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

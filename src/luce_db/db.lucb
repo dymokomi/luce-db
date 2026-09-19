@@ -4,7 +4,7 @@ import memory
 import prism
 
 pub struct Database:
-    var store: interop.Reference[prism.Store]
+    var backing: interop.Reference[prism.Store]
     var alive: bool
 
     pub func init():
@@ -13,81 +13,78 @@ pub struct Database:
     pub static func open(path: str, token: str) -> interop.Reference[Database]!:
         if token.length == 0:
             error(prism.invalid, "database token is required")
-        let native = try new Database() in memory.heap
-        errdefer native.close()
-        native.store = try prism.Store.open(path, token = token)
-        native.alive = true
-        return try interop.Reference[Database].adopt(native, database_type, memory.heap)
+        return try own_store(try prism.Store.open(path, token = token))
 
     pub func snapshot() -> interop.Reference[prism.Session]!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value().snapshot()
+        return try self.backing.value().snapshot()
 
     pub func begin() -> interop.Reference[prism.Session]!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value().begin()
+        return try self.backing.value().begin()
 
     pub func listen() -> !:
         if not self.alive:
             error(prism.closed, "database is closed")
-        try self.store.value().listen()
+        try self.backing.value().listen()
 
     pub func listen_tls(host: str, port: u16) -> u16!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value().listen_tls(host, port)
+        return try self.backing.value().listen_tls(host, port)
 
     pub func tls_issuer_x() -> const u8[]!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value().tls_issuer_x()
+        return try self.backing.value().tls_issuer_x()
 
     pub func tls_issuer_y() -> const u8[]!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value().tls_issuer_y()
+        return try self.backing.value().tls_issuer_y()
 
     pub func serve() -> !:
         if not self.alive:
             error(prism.closed, "database is closed")
-        try self.store.value().serve()
+        try self.backing.value().serve()
 
+    ## Borrowed until this Database closes. Do not transfer managed owners across workers.
     pub func store() -> prism.Store*!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value()
+        return self.backing.value()
 
     pub func bake(wait_ms: i64 = 0) -> i64!:
         if not self.alive:
             error(prism.closed, "database is closed")
-        return try self.store.value().bake(wait_ms)
+        return try self.backing.value().bake(wait_ms)
 
     pub mutating func close():
         if not self.alive:
             return
         self.alive = false
-        self.store.release()
+        self.backing.release()
 
     pub static func connect(socket_path: str, token: str) -> interop.Reference[Database]!:
         if token.length == 0:
             error(prism.invalid, "database token is required")
-        let store = try prism.Store.connect(socket_path, token)
-        let native = try new Database() in memory.heap
-        errdefer native.close()
-        native.store = store
-        native.alive = true
-        return try interop.Reference[Database].adopt(native, database_type, memory.heap)
+        return try own_store(try prism.Store.connect(socket_path, token))
 
     pub static func connect_tls(host: str, port: u16, token: str, issuer_x: const u8[], issuer_y: const u8[]) -> interop.Reference[Database]!:
         if token.length == 0:
             error(prism.invalid, "database token is required")
-        let store = try prism.Store.connect_tls(host, port, token, issuer_x, issuer_y)
-        let native = try new Database() in memory.heap
-        errdefer native.close()
-        native.store = store
-        native.alive = true
-        return try interop.Reference[Database].adopt(native, database_type, memory.heap)
+        return try own_store(try prism.Store.connect_tls(host, port, token, issuer_x, issuer_y))
+
+## Consumes the Store reference on success and failure. adopt disposes/frees its
+## native argument on failure; an additional errdefer would double-dispose it.
+func own_store(store: interop.Reference[prism.Store]) -> interop.Reference[Database]!:
+    let native = new Database() in memory.heap catch failure:
+        store.release()
+        error(failure.code, failure.message)
+    native.backing = store
+    native.alive = true
+    return try interop.Reference[Database].adopt(native, database_type, memory.heap)
 
 pub let database_type = interop.Type[Database]("Prism database", Database.close, closeable = true)

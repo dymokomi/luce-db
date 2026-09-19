@@ -1,21 +1,15 @@
 ## Database server over prism.Store.
 import files
+import c
 import interop
 import db
 import prism
 
-func db_dir() -> str:
-    return "/tmp/luce-db-server-test"
-
-func db_path() -> str:
-    return "/tmp/luce-db-server-test/root.db"
-
 pub func main(arguments: str[]) -> i32!:
-    files.delete_path(db_dir(), true) catch failure:
-        discard(failure)
-    try files.make_directory(db_dir())
+    assert(arguments.length == 2)
+    let path = arguments[1]
     var refused = false
-    let denied: interop.Reference[db.Database]? = db.Database.open(db_path(), "") catch failure:
+    let denied: interop.Reference[db.Database]? = db.Database.open(path, "") catch failure:
         assert(failure.code == prism.invalid)
         refused = true
         recover none
@@ -23,7 +17,8 @@ pub func main(arguments: str[]) -> i32!:
         extra.release()
         assert(false)
     assert(refused)
-    let database = try db.Database.open(db_path(), "secret")
+    assert(not files.exists((c.str)path))
+    let database = try db.Database.open(path, "secret")
     defer database.release()
     let tx = try database.value().begin()
     defer tx.release()
@@ -32,12 +27,26 @@ pub func main(arguments: str[]) -> i32!:
     defer text.release()
     try tx.value().set("/notes", "text", text)
     discard(try tx.value().commit())
-    tx.release()
+    tx.value().close()
     discard(try database.value().bake())
     let snap = try database.value().snapshot()
     defer snap.release()
     let got = try snap.value().get("/notes", "text")
     defer got.release()
     assert(try got.value().text_at() == "hello")
+    let backing = try database.value().store()
+    let retained = try backing.snapshot()
+    defer retained.release()
+    database.value().close()
+    database.value().close()
+    let after_close = try retained.value().get("/notes", "text")
+    defer after_close.release()
+    assert(try after_close.value().text_at() == "hello")
+    var rejected = false
+    let missing: prism.Store*? = database.value().store() catch failure:
+        assert(failure.code == prism.closed)
+        rejected = true
+        recover none
+    assert(rejected and missing == none)
     print("PASS luce-db server over prism.Store")
     return 0
