@@ -2,5 +2,8 @@
 name = "luce_db"
 source = "src"
 
+[dependencies]
+luce_prism = "../luce-prism"
+
 [exports]
 db = "luce_db.db"

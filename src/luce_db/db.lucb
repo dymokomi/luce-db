@@ -1,211 +1,93 @@
-## Public database API; native implementation, no foreign database backend.
-import luce_db.bytes
-import luce_db.engine as engine
-import luce_db.tree as tree
-import luce_db.backup as backup
-import luce_db.schema as schema_meta
+## Database server over prism.Store. Process, listen/connect, token auth. Storage is Prism.
 import interop
 import memory
-import utf8
+import prism
 
-pub let invalid = bytes.invalid
-pub let limit_exceeded = bytes.limit
-pub let closed = bytes.closed
-pub let conflict = bytes.conflict
-pub let busy = bytes.busy
-pub let corrupt = bytes.corrupt
-pub let uncertain = bytes.uncertain
-pub let timed_out = bytes.timed_out
-pub type Statistics = engine.Statistics
-pub type BackupInfo = backup.Info
-
-pub func verify_backup(path: str) -> BackupInfo!:
-    return try backup.verify(path)
-
-pub func restore_backup(path: str, destination: str) -> BackupInfo!:
-    return try backup.restore(path, destination)
-
-## Owned immutable value. Binary/text views live until Value.close/release.
-pub struct Value:
-    var item: tree.Entry*?
-
-    pub func bytes() -> const u8[]!:
-        let item = self.item else error(closed, "value is closed")
-        return item.value.span()
-
-    pub func text() -> str!:
-        let value = try self.bytes()
-        if not utf8.valid(value): error(invalid, "value is not UTF-8")
-        return (str)value
-
-    pub mutating func close():
-        if let item = self.item: tree.drop_entry(item)
-        self.item = none
-
-pub let value_type: interop.Type[Value] = interop.Type[Value]("DatabaseValue", Value.close, closeable = true)
-
-func owned_value(item: tree.Entry*?) -> interop.Reference[Value]?!:
-    let entry = item else return none
-    let native = try new Value(item = entry) in memory.heap
-    tree.hold_entry(entry)
-    return try interop.Reference[Value].adopt(native, value_type, memory.heap)
-
-pub struct Snapshot:
-    var view: engine.View
-
-    pub func get(key: str) -> interop.Reference[Value]?!:
-        return try owned_value(try self.view.get(key))
-
-    pub func contains(key: str) -> bool!:
-        return try self.view.get(key) != none
-
-    pub func count() -> i64!:
-        try self.view.ensure_open()
-        return (i64)tree.count(self.view.root)
-
-    pub func generation() -> i64!:
-        try self.view.ensure_open()
-        return (i64)self.view.generation
-
-    ## Lexicographically ordered key, borrowed until this snapshot is closed.
-    pub func key_at(index: i64) -> str?!:
-        try self.view.ensure_open()
-        if index < 0: error(invalid, "negative key index")
-        let item = tree.at(self.view.root, (usize)index) else return none
-        return (str)item.key.span()
-
-    ## none if the key is absent. Corrupt/mismatched metadata is an error.
-    pub func schema(key: str, application: str) -> i64?!:
-        return try schema_meta.current(self.view, key, application)
-
-    pub mutating func close():
-        self.view.close()
-
-pub let snapshot_type: interop.Type[Snapshot] = interop.Type[Snapshot]("DatabaseSnapshot", Snapshot.close, closeable = true)
-
-pub struct Transaction:
-    var transaction: engine.Transaction
-
-    pub func get(key: str) -> interop.Reference[Value]?!:
-        return try owned_value(try self.transaction.view.get(key))
-
-    pub func contains(key: str) -> bool!:
-        return try self.transaction.view.get(key) != none
-
-    pub mutating func put(key: str, value: const u8[]) -> !:
-        try self.transaction.put(key, value)
-
-    pub mutating func put_text(key: str, value: str) -> !:
-        try self.transaction.put(key, value.bytes)
-
-    pub mutating func insert(key: str, value: const u8[]) -> !:
-        try self.transaction.put(key, value, only_new = true)
-
-    pub mutating func insert_text(key: str, value: str) -> !:
-        try self.transaction.put(key, value.bytes, only_new = true)
-
-    pub mutating func remove(key: str) -> !:
-        try self.transaction.remove(key)
-
-    ## wait_ms bounds FIFO admission, not disk I/O after admission. Zero fails fast.
-    ## Successful commit closes the transaction. Conflicts require a fresh snapshot.
-    pub mutating func commit(wait_ms: i64 = 0) -> i64!:
-        return (i64)try self.transaction.commit(wait_ms)
-
-    pub mutating func close():
-        self.transaction.close()
-
-pub let transaction_type: interop.Type[Transaction] = interop.Type[Transaction]("DatabaseTransaction", Transaction.close, closeable = true)
-
-## One schema step. The reserved version update is already in this transaction.
-pub struct Migration:
-    var migration: schema_meta.Migration
-
-    pub func get(key: str) -> interop.Reference[Value]?!:
-        return try owned_value(try self.migration.get(key))
-
-    pub func contains(key: str) -> bool!:
-        return try self.migration.contains(key)
-
-    pub mutating func put(key: str, value: const u8[]) -> !:
-        try self.migration.put(key, value)
-
-    pub mutating func put_text(key: str, value: str) -> !:
-        try self.migration.put(key, value.bytes)
-
-    pub mutating func insert(key: str, value: const u8[]) -> !:
-        try self.migration.put(key, value, only_new = true)
-
-    pub mutating func insert_text(key: str, value: str) -> !:
-        try self.migration.put(key, value.bytes, only_new = true)
-
-    pub mutating func remove(key: str) -> !:
-        try self.migration.remove(key)
-
-    pub mutating func commit(wait_ms: i64 = 0) -> i64!:
-        return (i64)try self.migration.commit(wait_ms)
-
-    pub mutating func close():
-        self.migration.close()
-
-pub let migration_type: interop.Type[Migration] = interop.Type[Migration]("DatabaseMigration", Migration.close, closeable = true)
-
-## Embedded database, not a network server. Share native engine access with workers;
-## never move a Luce/interop managed reference across threads. Close after joining.
 pub struct Database:
-    var store: engine.Store*?
+    var store: interop.Reference[prism.Store]
+    var alive: bool
 
-    pub func init(path: str) -> !:
-        self.store = try engine.open(path)
+    pub func init():
+        return
 
-    pub func snapshot() -> interop.Reference[Snapshot]!:
-        let store = self.store else error(closed, "database is closed")
-        var view = try engine.snapshot(store)
-        let native = new Snapshot(view = view) in memory.heap catch failure:
-            view.close()
-            error(failure.code, failure.message)
-        return try interop.Reference[Snapshot].adopt(native, snapshot_type, memory.heap)
+    pub static func open(path: str, token: str) -> interop.Reference[Database]!:
+        if token.length == 0:
+            error(prism.invalid, "database token is required")
+        let native = try new Database() in memory.heap
+        errdefer native.close()
+        native.store = try prism.Store.open(path, token = token)
+        native.alive = true
+        return try interop.Reference[Database].adopt(native, database_type, memory.heap)
 
-    pub func begin() -> interop.Reference[Transaction]!:
-        let store = self.store else error(closed, "database is closed")
-        var transaction = try engine.transaction(store)
-        let native = new Transaction(transaction = transaction) in memory.heap catch failure:
-            transaction.close()
-            error(failure.code, failure.message)
-        return try interop.Reference[Transaction].adopt(native, transaction_type, memory.heap)
+    pub func snapshot() -> interop.Reference[prism.Session]!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value().snapshot()
 
-    ## Observational counters; the generation/record/byte triple is one committed view.
-    pub func statistics() -> Statistics!:
-        let store = self.store else error(closed, "database is closed")
-        return engine.statistics(store)
+    pub func begin() -> interop.Reference[prism.Session]!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value().begin()
 
-    ## Reclaim obsolete journal history without changing committed generation.
-    ## Admission is bounded like commit; replacement I/O itself is not timed out.
-    pub func checkpoint(wait_ms: i64 = 0) -> i64!:
-        let store = self.store else error(closed, "database is closed")
-        return (i64)try engine.checkpoint(store, wait_ms)
+    pub func listen() -> !:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        try self.store.value().listen()
 
-    ## Export one committed snapshot without blocking writers during storage I/O.
-    ## Destination must be new. An uncertain error requires inspecting that path.
-    pub func backup(path: str) -> BackupInfo!:
-        let store = self.store else error(closed, "database is closed")
-        return try engine.backup_to(store, path)
+    pub func listen_tls(host: str, port: u16) -> u16!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value().listen_tls(host, port)
 
-    ## Schema zero on a genuinely empty store. Matching existing zero is a no-op.
-    pub func initialize_schema(key: str, application: str, wait_ms: i64 = 0) -> i64!:
-        let store = self.store else error(closed, "database is closed")
-        return (i64)try schema_meta.initialize(store, key, application, wait_ms)
+    pub func tls_issuer_x() -> const u8[]!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value().tls_issuer_x()
 
-    pub func begin_migration(key: str, application: str, expected_version: i64) -> interop.Reference[Migration]!:
-        let store = self.store else error(closed, "database is closed")
-        var migration = try schema_meta.begin(store, key, application, expected_version)
-        let native = new Migration(migration = migration) in memory.heap catch failure:
-            migration.close()
-            error(failure.code, failure.message)
-        return try interop.Reference[Migration].adopt(native, migration_type, memory.heap)
+    pub func tls_issuer_y() -> const u8[]!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value().tls_issuer_y()
+
+    pub func serve() -> !:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        try self.store.value().serve()
+
+    pub func store() -> prism.Store*!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value()
+
+    pub func bake(wait_ms: i64 = 0) -> i64!:
+        if not self.alive:
+            error(prism.closed, "database is closed")
+        return try self.store.value().bake(wait_ms)
 
     pub mutating func close():
-        if let store = self.store: engine.drop(store)
-        self.store = none
+        if not self.alive:
+            return
+        self.alive = false
+        self.store.release()
 
-pub let database_type: interop.Type[Database] = interop.Type[Database]("Database", Database.close, closeable = true)
+    pub static func connect(socket_path: str, token: str) -> interop.Reference[Database]!:
+        if token.length == 0:
+            error(prism.invalid, "database token is required")
+        let store = try prism.Store.connect(socket_path, token)
+        let native = try new Database() in memory.heap
+        errdefer native.close()
+        native.store = store
+        native.alive = true
+        return try interop.Reference[Database].adopt(native, database_type, memory.heap)
+
+    pub static func connect_tls(host: str, port: u16, token: str, issuer_x: const u8[], issuer_y: const u8[]) -> interop.Reference[Database]!:
+        if token.length == 0:
+            error(prism.invalid, "database token is required")
+        let store = try prism.Store.connect_tls(host, port, token, issuer_x, issuer_y)
+        let native = try new Database() in memory.heap
+        errdefer native.close()
+        native.store = store
+        native.alive = true
+        return try interop.Reference[Database].adopt(native, database_type, memory.heap)
+
+pub let database_type = interop.Type[Database]("Prism database", Database.close, closeable = true)

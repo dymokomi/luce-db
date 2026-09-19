@@ -1,46 +1,13 @@
-from db import Database, verify_backup, restore_backup
+from db import Database
+from prism import Value
 
 pub func main(arguments: list[str]) -> int!:
-    let database = Database(arguments[0])
-    assert(database.initialize_schema("schema", "demo") == 1)
-    assert(database.initialize_schema("schema", "demo") == 1)
-    let migration = database.begin_migration("schema", "demo", 0)
-    migration.insert_text("user/alice", "Alice")
-    migration.put_text("package/demo", "1.0")
-    assert(migration.commit(wait_ms = 1000) == 2)
-    let statistics = database.statistics()
-    assert(statistics.generation == 2 and statistics.records == 3)
-    assert(statistics.journal_bytes > 16)
-    assert(not statistics.needs_reopen)
-    assert(statistics.waiting_writers == 0 and statistics.active_views == 0)
-    let snapshot = database.snapshot()
-    assert(snapshot.count() == 3)
-    assert(snapshot.schema("schema", "demo") == 1)
-    let value = snapshot.get("user/alice") else return 1
-    assert(value.text() == "Alice")
-    let backup_path = f"{arguments[0]}.backup"
-    let restore_path = f"{arguments[0]}.restored"
-    let info = database.backup(backup_path)
-    assert(info.generation == 2 and info.records == 3 and info.bytes > 64)
-    assert(verify_backup(backup_path).bytes == info.bytes)
-    assert(restore_backup(backup_path, restore_path).generation == 2)
-    let restored = Database(restore_path)
-    let restored_snapshot = restored.snapshot()
-    assert(restored_snapshot.schema("schema", "demo") == 1)
-    let restored_value = restored_snapshot.get("user/alice") else return 1
-    assert(restored_value.text() == "Alice")
-    restored.close()
-    assert(database.checkpoint(wait_ms = 1000) == 2)
-    assert(snapshot.generation() == 2 and snapshot.count() == 3)
-    assert(value.text() == "Alice")
-    database.close()
-    assert(snapshot.contains("user/alice"))
-    snapshot.close()
-    assert(value.text() == "Alice")
-    value.close()
-    let reopened = Database(arguments[0])
-    assert(reopened.snapshot().generation() == 2)
-    assert(reopened.statistics().queued_attempts == 0)
-    reopened.close()
-    print("PASS Luce facade, ownership, reopen, verified backup/restore")
+    let database = Database.open(arguments[0], "secret")
+    let tx = database.begin()
+    tx.add("/notes", "file")
+    tx.set("/notes", "text", Value.text("hello"))
+    discard(tx.commit())
+    let snap = database.snapshot()
+    assert(snap.get("/notes", "text").text_at() == "hello")
+    print("PASS Luce database facade over prism.Store")
     return 0

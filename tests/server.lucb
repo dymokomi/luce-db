@@ -1,0 +1,43 @@
+## Database server over prism.Store.
+import files
+import interop
+import db
+import prism
+
+func db_dir() -> str:
+    return "/tmp/luce-db-server-test"
+
+func db_path() -> str:
+    return "/tmp/luce-db-server-test/root.db"
+
+pub func main(arguments: str[]) -> i32!:
+    files.delete_path(db_dir(), true) catch failure:
+        discard(failure)
+    try files.make_directory(db_dir())
+    var refused = false
+    let denied: interop.Reference[db.Database]? = db.Database.open(db_path(), "") catch failure:
+        assert(failure.code == prism.invalid)
+        refused = true
+        recover none
+    if let extra = denied:
+        extra.release()
+        assert(false)
+    assert(refused)
+    let database = try db.Database.open(db_path(), "secret")
+    defer database.release()
+    let tx = try database.value().begin()
+    defer tx.release()
+    try tx.value().add("/notes", "file")
+    let text = try prism.Value.text("hello")
+    defer text.release()
+    try tx.value().set("/notes", "text", text)
+    discard(try tx.value().commit())
+    tx.release()
+    discard(try database.value().bake())
+    let snap = try database.value().snapshot()
+    defer snap.release()
+    let got = try snap.value().get("/notes", "text")
+    defer got.release()
+    assert(try got.value().text_at() == "hello")
+    print("PASS luce-db server over prism.Store")
+    return 0
