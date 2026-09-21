@@ -1,0 +1,18 @@
+#prisma 4.0
+def package "luce-db" {
+    str owner = "dymokomi"
+    str version = "0.1.0"
+    str language = "luce-base"
+    str description = "Database server over luce-prism. Prism is the storage engine (documents, WAL, flock). This package is the process: open a store, listen, accept clients, require a token."
+    str readme = "README.md"
+
+    def export "db" {
+        str module = "luce_db.db"
+    }
+
+    def dependency "luce-prism" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-prism"
+    }
+}
