@@ -1,7 +1,8 @@
 #prisma 4.0
 def package "luce-db" {
     str owner = "dymokomi"
-    str version = "0.1.0"
+    str version = "0.1.1"
+    str kind = "package"
     str language = "luce-base"
     str description = "Database server over luce-prism. Prism is the storage engine (documents, WAL, flock). This package is the process: open a store, listen, accept clients, require a token."
     str readme = "README.md"
