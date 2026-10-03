@@ -1,5 +1,5 @@
-from db import Database
-from prism import Value
+from luce_db.db import Database
+from luce_prism.prism import Value
 
 pub func main(arguments: list[str]) -> int!:
     let database = Database.open(arguments[0], "secret")

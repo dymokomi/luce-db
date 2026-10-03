@@ -1,7 +1,7 @@
 ## Database server over prism.Store. Process, listen/connect, token auth. Storage is Prism.
 import interop
 import memory
-import prism
+import luce_prism.prism
 
 pub struct Database:
     var backing: interop.Reference[prism.Store]
