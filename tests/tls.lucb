@@ -1,9 +1,9 @@
 ## TLS listen/connect over prism.Store.
-import luce_std.files
+from luce_std import files
 import thread
 import interop
-import luce_db.db
-import luce_prism.prism
+from luce_db import db
+from luce_prism import prism
 
 var g_port: @u64
 var g_ready: @u64

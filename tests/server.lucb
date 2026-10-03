@@ -1,9 +1,9 @@
 ## Database server over prism.Store.
-import luce_std.files
+from luce_std import files
 import c
 import interop
-import luce_db.db
-import luce_prism.prism
+from luce_db import db
+from luce_prism import prism
 
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 2)
