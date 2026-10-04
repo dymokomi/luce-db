@@ -21,7 +21,7 @@ pub func main(arguments: list[str]) -> int!:
     let tx = database.begin()
     tx.add("/notes", "file")
     tx.set("/notes", "text", Value.text("hello"))
-    discard(tx.commit())
+    _ = tx.commit()
     let snap = database.snapshot()
     print(snap.get("/notes", "text").text_at())
     return 0
