@@ -10,7 +10,7 @@ pub struct Database:
     pub func init():
         return
 
-    pub func open(path: str, token: str) -> interop.Reference[Database]!:
+    pub static func open(path: str, token: str) -> interop.Reference[Database]!:
         if token.length == 0:
             error(prism.invalid, "database token is required")
         return try own_store(try prism.Store.open(path, token = token))
@@ -67,12 +67,12 @@ pub struct Database:
         self.alive = false
         self.backing.release()
 
-    pub func connect(socket_path: str, token: str) -> interop.Reference[Database]!:
+    pub static func connect(socket_path: str, token: str) -> interop.Reference[Database]!:
         if token.length == 0:
             error(prism.invalid, "database token is required")
         return try own_store(try prism.Store.connect(socket_path, token))
 
-    pub func connect_tls(host: str, port: u16, token: str, issuer_x: const u8[], issuer_y: const u8[]) -> interop.Reference[Database]!:
+    pub static func connect_tls(host: str, port: u16, token: str, issuer_x: const u8[], issuer_y: const u8[]) -> interop.Reference[Database]!:
         if token.length == 0:
             error(prism.invalid, "database token is required")
         return try own_store(try prism.Store.connect_tls(host, port, token, issuer_x, issuer_y))
