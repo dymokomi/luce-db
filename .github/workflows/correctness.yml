@@ -17,51 +17,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: luce-db
-      - name: Read source pins
-        id: pins
-        shell: bash
-        run: |
-          echo "base=$(tr -d '\n' < luce-db/bootstrap/BASE)" >> "$GITHUB_OUTPUT"
-          echo "luce=$(tr -d '\n' < luce-db/bootstrap/LUCE)" >> "$GITHUB_OUTPUT"
-          echo "prism=$(tr -d '\n' < luce-db/bootstrap/PRISM)" >> "$GITHUB_OUTPUT"
-          echo "tls=$(tr -d '\n' < luce-db/bootstrap/TLS)" >> "$GITHUB_OUTPUT"
-          echo "crypto=$(tr -d '\n' < luce-db/bootstrap/CRYPTO)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: dymokomi/luce-base
-          ref: ${{ steps.pins.outputs.base }}
           path: luce-base
-      - name: Check out the pinned library packages
+      # every dependency at main, beside this checkout (luce-base docs/CI.md)
+      - name: Check out dependencies at main
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
-          while read -r name revision; do
-            revision=${revision%$'\r'}
-            [ -n "$name" ] || continue
-            git init -q "$name"
-            git -C "$name" fetch -q --depth 1 "https://github.com/dymokomi/$name.git" "$revision"
-            git -C "$name" checkout -q --detach FETCH_HEAD
-          done < luce-db/bootstrap/PACKAGES
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce
-          ref: ${{ steps.pins.outputs.luce }}
-          path: luce
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-prism
-          ref: ${{ steps.pins.outputs.prism }}
-          path: luce-prism
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-tls
-          ref: ${{ steps.pins.outputs.tls }}
-          path: luce-tls
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-crypto
-          ref: ${{ steps.pins.outputs.crypto }}
-          path: luce-crypto
+          python3 luce-base/tools/checkout_main.py luce-db luce
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
