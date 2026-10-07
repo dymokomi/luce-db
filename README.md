@@ -40,19 +40,11 @@ There is no byte-key KV API. The Unix path uses a shared-secret token. Remote
 clients use TLS plus the same token. Not `luce-auth` and not a public CA store.
 
 ```sh
-python3 tools/bootstrap.py
-python3 tests/run.py --mode all
+luc test
 ```
 
-Check out sibling `luce-base`, `luce`, `luce-prism`, `luce-tls` and
-`luce-crypto` at the revisions in `bootstrap/` first. Bootstrap verifies those
-revisions and builds compilers inside this package without editing language
-sources. Alternatively, pass `--base PATH --luce PATH` to the test runner.
-Compiler caches default to `build/cache`; `LUCE_CACHE` can override that location.
-
-The default test matrix covers native optimization levels 0–3 and the C debug/
-release backends. Each mode exercises the native DB facade, loopback TLS and an
-actual Luce consumer, with runner-owned temporary database paths. These are
+`tests/stores` builds the drivers in `tests/stores/drivers/` and runs the native DB facade,
+loopback TLS and an actual Luce consumer, each on a fresh database file. These are
 functional smoke tests, not durability/fault, sanitizer or shutdown guarantees.
 Prism's detached TLS worker and connection lifecycle still needs hardening before
 production use. The removed standalone KV engine's checkpoint/backup/resource

@@ -1,0 +1,17 @@
+#prisma 4.0
+def package "luce-db-stores" {
+    str language = "luce"
+    str source = "."
+    def dependency "luce-db" {
+        str owner = "dymokomi"
+        str path = "../.."
+    }
+    def dependency "luce-prism" {
+        str owner = "dymokomi"
+        str path = "../../../luce-prism"
+    }
+    def dependency "luce-std" {
+        str owner = "dymokomi"
+        str path = "../../../luce-std"
+    }
+}

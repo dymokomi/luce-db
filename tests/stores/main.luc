@@ -1,0 +1,31 @@
+# The database server over fresh Prism stores: each driver under drivers/ opens its own
+# store in a scratch directory (token checks and plain clients, TLS listen and connect,
+# and the Luce facade). This is a package of its own only for the dependencies the drivers
+# name; they use luce-db's public module. `luc test` runs it with LUCE and LUCE_BASE set.
+from luce_std import files, paths, process
+
+let failed = ErrorCode.package(1)
+
+pub func main(arguments: list[str]) -> int!:
+    let here = process.current_directory()
+    let base = process.variable("LUCE_BASE") else "luce-base"
+    let luce = process.variable("LUCE") else "luce"
+    let build = paths.join(paths.directory(paths.directory(here)), "build/tests/stores")
+    let binaries = paths.join(build, "drivers")
+    let scratch = paths.join(build, "data")
+    if files.exists(scratch):
+        files.remove_tree(scratch)
+    files.ensure_directory(binaries)
+    files.ensure_directory(scratch)
+    for name in ["server", "tls", "facade"]:
+        let compiler = luce if name == "facade" else base
+        let source = paths.join(here, f"drivers/{name}.luc" if name == "facade" else f"drivers/{name}.lucb")
+        let built = process.run(compiler, ["build", source, "--native", "-o", paths.join(binaries, name)], here)
+        if built.exit_code != 0:
+            error(failed, f"build {name}: {built.output}{built.error_output}")
+        let ran = process.run(paths.join(binaries, name), [paths.join(scratch, f"{name}.db")], here)
+        if ran.output != "":
+            print(ran.output.trim_end())
+        if ran.exit_code != 0:
+            error(failed, f"{name}: exit status {ran.exit_code}\n{ran.error_output}")
+    return 0
